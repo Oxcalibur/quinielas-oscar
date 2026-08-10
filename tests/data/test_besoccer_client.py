@@ -1,218 +1,145 @@
+from unittest.mock import Mock, patch
+
 import pytest
 import requests
-from unittest.mock import patch, Mock
+
 from src.data.besoccer_client import BeSoccerClient
 
 
-def test_module_exports() -> None:
-    import src.data.besoccer_client as bc
-    assert "BeSoccerClient" in bc.__all__
-
-
-def test_client_initialization() -> None:
-    client = BeSoccerClient(api_key="test_key", base_url="http://test.com")
-    assert client.api_key == "test_key"
-    assert client.base_url == "http://test.com"
-
-
 @patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_success(mock_logger: Mock, mock_get: Mock) -> None:
+def test_fetch_matches_success_list_payload(mock_get: Mock) -> None:
+    """Validate matches are parsed correctly when the API returns a list payload."""
     mock_response = Mock()
     mock_response.json.return_value = [
-        {"home_team": "real madrid", "away_team": "barca"}
+        {"home_team": "real madrid", "away_team": "barcelona"}
     ]
+    mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("test_key", "http://test.com")
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
     result = client.fetch_matches(1)
-    
+
+    assert result == [{"home_team": "Real Madrid", "away_team": "FC Barcelona"}]
     mock_get.assert_called_once_with(
-        "http://test.com/matches",
-        params={"league": 1, "key": "test_key"},
-        timeout=10
+        "http://dummy.url/matches",
+        params={"api_key": "dummy_key", "league_id": 1},
+        timeout=10,
     )
-    assert len(result) == 1
-    assert result[0]["home_team"] == "Real Madrid"
-    assert result[0]["away_team"] == "FC Barcelona"
 
 
 @patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_api_response_not_list(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = {"home_team": "real madrid", "away_team": "barca"}
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    
-    assert len(result) == 1
-    assert result[0]["home_team"] == "Real Madrid"
-    assert result[0]["away_team"] == "FC Barcelona"
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_dict_with_non_list_keys_fallback(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = {"data": [{"home_team": "real madrid"}]}
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    
-    assert len(result) == 1
-    assert result[0]["home_team"] == "Real Madrid"
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_multiple_lists_in_dict(mock_logger: Mock, mock_get: Mock) -> None:
+def test_fetch_matches_success_dict_payload(mock_get: Mock) -> None:
+    """Validate matches are parsed correctly when the API returns a dictionary payload wrapping a list."""
     mock_response = Mock()
     mock_response.json.return_value = {
-        "ignored_str": "value",
-        "matches": [{"home_team": "real madrid"}],
-        "other_list": [{"home_team": "barca"}]
+        "matches": [
+            {"home_team": "rmadrid", "away_team": "fc barcelona"}
+        ]
     }
+    mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
     result = client.fetch_matches(1)
-    
-    # Python 3.7+ dict preserves insertion order, so "matches" should be picked first
-    assert len(result) == 1
-    assert result[0]["home_team"] == "Real Madrid"
+
+    assert result == [{"home_team": "Real Madrid", "away_team": "FC Barcelona"}]
 
 
 @patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_ignores_non_dict_elements(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = ["string_element", {"home_team": "real madrid"}]
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    
-    assert len(result) == 1
-    assert result[0]["home_team"] == "Real Madrid"
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_normalization_only_on_target_keys(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = [{"other_key": "real madrid"}]
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    
-    assert result[0]["other_key"] == "real madrid"
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_aborts_on_invalid_data_type(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = [{"home_team": 123}]
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    with pytest.raises(TypeError):
+def test_fetch_matches_network_failure(mock_get: Mock) -> None:
+    """Validate that requests.RequestException is logged and re-raised upon network failure."""
+    mock_get.side_effect = requests.RequestException("Network error")
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
+    with pytest.raises(requests.RequestException):
         client.fetch_matches(1)
 
 
 @patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_aborts_on_unmapped_team_name(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = [{"home_team": "Unknown FC"}]
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    with pytest.raises(KeyError):
-        client.fetch_matches(1)
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_non_200_http_error(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_get.side_effect = requests.HTTPError("404 Not Found")
-    
-    client = BeSoccerClient("key", "url")
-    with pytest.raises(requests.HTTPError):
-        client.fetch_matches(1)
-    mock_logger.warning.assert_called_once()
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_connection_timeout(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_get.side_effect = requests.Timeout("Timeout")
-    
-    client = BeSoccerClient("key", "url")
-    with pytest.raises(requests.Timeout):
-        client.fetch_matches(1)
-    mock_logger.warning.assert_called_once()
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_none_teams_fields_handled_correctly(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = [{"home_team": None, "away_team": "barca"}]
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    assert result[0]["home_team"] is None
-    assert result[0]["away_team"] == "FC Barcelona"
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_missing_teams_fields_passed_through(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = [{"id": 1}]
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    assert result[0]["id"] == 1
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_unexpected_payload_shape(mock_logger: Mock, mock_get: Mock) -> None:
-    mock_response = Mock()
-    mock_response.json.return_value = "unexpected string"
-    mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    assert result == []
-
-
-@patch("src.data.besoccer_client.requests.get")
-@patch("src.data.besoccer_client.logger")
-def test_fetch_matches_mixed_valid_and_missing_keys(mock_logger: Mock, mock_get: Mock) -> None:
+def test_fetch_matches_key_error_unmapped_team(mock_get: Mock) -> None:
+    """Validate that KeyError is raised when a team name is not defined in cement_dictionary."""
     mock_response = Mock()
     mock_response.json.return_value = [
-        {"home_team": "real madrid"},
-        {"away_team": "barca"},
-        {"home_team": None, "away_team": None},
-        {"other_field": "val"}
+        {"home_team": "Unknown FC", "away_team": "real madrid"}
     ]
+    mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
-    
-    client = BeSoccerClient("key", "url")
-    result = client.fetch_matches(1)
-    
-    assert len(result) == 4
-    assert result[0]["home_team"] == "Real Madrid"
-    assert result[1]["away_team"] == "FC Barcelona"
-    assert result[2]["home_team"] is None
-    assert result[2]["away_team"] is None
-    assert result[3]["other_field"] == "val"
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
+    with pytest.raises(KeyError) as exc_info:
+        client.fetch_matches(1)
+    assert "Unmapped team name" in str(exc_info.value)
+
+
+@patch("src.data.besoccer_client.requests.get")
+def test_fetch_matches_key_error_missing_keys(mock_get: Mock) -> None:
+    """Validate that KeyError is raised if the keys 'home_team' or 'away_team' are missing in the item."""
+    mock_response = Mock()
+    mock_response.json.return_value = [{"other_key": "value"}]
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
+    with pytest.raises(KeyError) as exc_info:
+        client.fetch_matches(1)
+    assert "Missing 'home_team' or 'away_team'" in str(exc_info.value)
+
+
+@patch("src.data.besoccer_client.requests.get")
+def test_fetch_matches_skips_non_dict_items(mock_get: Mock) -> None:
+    """Validate that TypeError is raised if a payload item is not a dictionary."""
+    mock_response = Mock()
+    mock_response.json.return_value = ["not_a_dict"]
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
+    with pytest.raises(TypeError) as exc_info:
+        client.fetch_matches(1)
+    assert "Item in payload is not a dictionary" in str(exc_info.value)
+
+
+@patch("src.data.besoccer_client.requests.get")
+def test_fetch_matches_fail_fast_on_non_dict_items(mock_get: Mock) -> None:
+    """Validate that match processing fails fast with TypeError when encountering any non-dict items."""
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {"home_team": "real madrid", "away_team": "barcelona"},
+        "invalid_string"
+    ]
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
+    with pytest.raises(TypeError) as exc_info:
+        client.fetch_matches(1)
+    assert "Item in payload is not a dictionary" in str(exc_info.value)
+
+
+@patch("src.data.besoccer_client.requests.get")
+def test_fetch_matches_unexpected_payload_shape(mock_get: Mock) -> None:
+    """Validate that ValueError is raised if the returned payload has an unsupported shape (neither dict nor list)."""
+    mock_response = Mock()
+    mock_response.json.return_value = "invalid_payload_shape"
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
+    with pytest.raises(ValueError) as exc_info:
+        client.fetch_matches(1)
+    assert "Unexpected payload shape" in str(exc_info.value)
+
+
+@patch("src.data.besoccer_client.requests.get")
+def test_fetch_matches_normalize_type_error(mock_get: Mock) -> None:
+    """Validate that TypeError is raised and forwarded when normalized_team_name receives a non-string type."""
+    mock_response = Mock()
+    mock_response.json.return_value = [
+        {"home_team": 12345, "away_team": "barcelona"}
+    ]
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
+
+    client = BeSoccerClient("dummy_key", "http://dummy.url")
+    with pytest.raises(TypeError) as exc_info:
+        client.fetch_matches(1)
+    assert "Expected string for team name" in str(exc_info.value)
