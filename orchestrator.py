@@ -184,6 +184,57 @@ def is_test_file(filepath: str, content: str = None, project_config: "PythonProj
 # =====================================================================
 # GESTOR DE CONTEXTO HIBRIDO (ANALISIS ESTATICO DE ARCHIVOS CON AST)
 # =====================================================================
+def extract_imported_modules(tree: ast.AST, module_name: str) -> list[str]:
+    """Extrae los modulos reales importados usando AST, resolviendo imports relativos."""
+    imported_modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported_modules.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            level = node.level
+            module = node.module or ""
+            if level > 0:
+                parts = module_name.split('.')
+                if level <= len(parts):
+                    base = ".".join(parts[:-level])
+                    if base:
+                        resolved_base = f"{base}.{module}" if module else base
+                    else:
+                        resolved_base = module
+                else:
+                    resolved_base = module
+            else:
+                resolved_base = module
+
+            if resolved_base:
+                imported_modules.add(resolved_base)
+                
+            for alias in node.names:
+                if resolved_base:
+                    imported_modules.add(f"{resolved_base}.{alias.name}")
+                else:
+                    imported_modules.add(alias.name)
+                    
+    return list(imported_modules)
+
+def resolve_imported_files(imported_modules: list[str], root_path: str, all_py_files: list[str]) -> list[str]:
+    """Resuelve los nombres de modulos a archivos exactos."""
+    resolved = set()
+    
+    # Precompute module to file mapping
+    module_to_file = {}
+    for f in all_py_files:
+        mod = f.replace("\\", "/").replace("/", ".").replace(".py", "")
+        if mod.endswith(".__init__"):
+            mod = mod[:-9]
+        module_to_file[mod] = f
+        
+    for mod in imported_modules:
+        if mod in module_to_file:
+            resolved.add(module_to_file[mod])
+    return list(resolved)
+
 class RepositoryContextManager:
     def __init__(self, root_path=".", cache_dir=None):
         self.root_path = root_path
@@ -432,6 +483,13 @@ class RepositoryContextManager:
         config.dev_dependencies = list(set(config.dev_dependencies))
         config.detected_quality_tools = list(set(config.detected_quality_tools))
 
+        unique_targets = []
+        for t in config.mypy_targets:
+            clean_t = t.strip()
+            if clean_t and clean_t not in unique_targets:
+                unique_targets.append(clean_t)
+        config.mypy_targets = unique_targets
+
         # 4. Fallback: activate tools found in deps but not yet configured
         all_deps = config.dependencies + config.dev_dependencies
         for tool in ["mypy", "ruff", "pytest", "vulture"]:
@@ -455,12 +513,7 @@ class RepositoryContextManager:
             referenced_symbols = set()
 
             for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    imports.extend(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom):
-                    module = node.module or ''
-                    imports.extend(f"from {module} import {alias.name}" for alias in node.names)
-                elif isinstance(node, ast.ClassDef):
+                if isinstance(node, ast.ClassDef):
                     classes.append(node.name)
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     functions.append(node.name)
@@ -473,15 +526,16 @@ class RepositoryContextManager:
 
             docstring = ast.get_docstring(tree)
             relative_path = os.path.relpath(filepath, self.root_path).replace("\\", "/")
+            module_name_str = relative_path.replace('/', '.').replace('.py', '')
 
             return PythonFileSummary(
                 filepath=relative_path,
-                module_name=relative_path.replace('/', '.').replace('.py', ''),
+                module_name=module_name_str,
                 is_test=is_test_file(relative_path, content, project_config),
                 classes=classes,
                 functions=functions,
                 signatures=extract_ast_signatures(tree),
-                imports=imports,
+                imports=extract_imported_modules(tree, module_name_str),
                 exports=exports,
                 docstring_summary=(docstring.split('\n')[0] if docstring else ""),
                 referenced_symbols=sorted(list(referenced_symbols)),
@@ -594,31 +648,63 @@ class RepositoryContextManager:
 
     def _detect_testing_conventions(self, context: "RepositoryContext"):
         """Detects testing framework and mocking style from test files and conftest."""
-        test_contents = []
-        for path in context.test_index.keys():
-            test_contents.append(self.get_file_content(path))
-        
+        import ast as _ast
+        has_pytest = False
+        has_unittest = False
+        has_mocker = False
+        has_monkeypatch = False
+        has_mock = False
+
+        all_paths = list(context.test_index.keys())
         try:
             conftest_path = resolve_safe_path(self.root_path, "conftest.py")
             if os.path.exists(conftest_path):
-                test_contents.append(self.get_file_content("conftest.py"))
+                all_paths.append("conftest.py")
         except ValueError:
             pass
-        
-        full_test_code = "\n".join(test_contents)
 
-        if "import pytest" in full_test_code:
+        for path in all_paths:
+            try:
+                content = self.get_file_content(path)
+                tree = _ast.parse(content, filename=path)
+                for node in _ast.walk(tree):
+                    if isinstance(node, _ast.Import):
+                        for alias in node.names:
+                            if alias.name == "pytest":
+                                has_pytest = True
+                            elif alias.name == "unittest":
+                                has_unittest = True
+                    elif isinstance(node, _ast.ImportFrom):
+                        module = node.module or ""
+                        if module == "pytest":
+                            has_pytest = True
+                        elif module.startswith("unittest"):
+                            has_unittest = True
+                            if module == "unittest.mock":
+                                has_mock = True
+                    elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                        for arg in node.args.args:
+                            if arg.arg == "mocker":
+                                has_mocker = True
+                            elif arg.arg == "monkeypatch":
+                                has_monkeypatch = True
+            except Exception:
+                pass
+
+        if has_pytest:
             context.detected_test_framework = "pytest"
-        elif "import unittest" in full_test_code:
+        elif has_unittest:
             context.detected_test_framework = "unittest"
 
         # Mocking style detection
-        if re.search(r"def .+\(mocker", full_test_code):
+        if has_mocker:
             context.detected_mocking_instruction = "Usa el fixture 'mocker' de `pytest-mock` para el mocking."
-        elif re.search(r"def .+\(monkeypatch", full_test_code):
+        elif has_monkeypatch:
             context.detected_mocking_instruction = "Usa el fixture 'monkeypatch' de `pytest` para el patching."
-        elif "from unittest.mock import" in full_test_code:
-            context.detected_mocking_instruction = "Usa `unittest.mock.patch` para aislar dependencias."
+        elif has_mock:
+            context.detected_mocking_instruction = "Usa `unittest.mock` (`patch`, `MagicMock`) para aislar el componente."
+        else:
+            context.detected_mocking_instruction = "Aisla dependencias usando dependencias inyectables o librerías estándar."
 
     def _load_cache(self) -> "RepositoryIndexCache":
         if not os.path.exists(self.cache_file):
@@ -737,6 +823,12 @@ class RepositoryContextManager:
                     summary = None
                     if cached_summary and cached_summary.file_hash == current_hash:
                         summary = cached_summary
+                        try:
+                            with open(full_path, "r", encoding="utf-8") as text_f:
+                                text_content = text_f.read()
+                            summary.is_test = is_test_file(relative_path, text_content, context.structured_config)
+                        except Exception:
+                            pass
                         files_from_cache += 1
                     else:
                         summary = self._analyze_python_file(full_path, context.structured_config)
@@ -765,14 +857,7 @@ class RepositoryContextManager:
 
         # Calculate available token budget for files
         # This is a rough estimation of the fixed parts of the prompt
-        base_prompt_tokens = (
-            len(context.repository_map) // 4 +
-            len(context.architecture_document) // 4 +
-            len(issue_description) // 4 +
-            sum(len(c) // 4 for c in context.project_configuration.values()) +
-            sum(len(c) // 4 for c in context.dependency_files.values()) +
-            1000 # Overhead for prompt instructions
-        )
+        base_prompt_tokens = estimate_repository_context_tokens(context, issue_description)
         available_tokens_for_files = budget.maximum_input_tokens - budget.reserved_output_tokens - base_prompt_tokens
         
         logging.info(f"Presupuesto de tokens disponible para archivos: {available_tokens_for_files}")
@@ -789,23 +874,21 @@ class RepositoryContextManager:
 
     def _link_dependencies(self, context: "RepositoryContext"):
         """Establishes relationships between files based on imports."""
-        source_modules = {summary.module_name: summary.filepath for summary in context.source_index.values()}
         all_summaries = {**context.source_index, **context.test_index}
+        all_py_files = list(all_summaries.keys())
 
         for path, summary in all_summaries.items():
-            for imp in summary.imports:
-                imp_module = imp.split(" import ")[0].replace("from ", "").strip()
-                if imp_module in source_modules:
-                    source_path = source_modules[imp_module]
-                    if source_path in context.source_index:
-                        source_summary = context.source_index[source_path]
-                        
-                        if source_path not in summary.imported_files:
-                            summary.imported_files.append(source_path)
-                        if path not in source_summary.imported_by:
-                            source_summary.imported_by.append(path)
-                        
-                        if summary.is_test and not source_summary.is_test:
+            resolved_files = resolve_imported_files(summary.imports, self.root_path, all_py_files)
+            for source_path in resolved_files:
+                if source_path in context.source_index:
+                    source_summary = context.source_index[source_path]
+                    
+                    if source_path not in summary.imported_files:
+                        summary.imported_files.append(source_path)
+                    if path not in source_summary.imported_by:
+                        source_summary.imported_by.append(path)
+                    
+                    if summary.is_test and not source_summary.is_test:
                             if path not in source_summary.tested_by:
                                 source_summary.tested_by.append(path)
                             if source_path not in summary.tests_for:
@@ -950,6 +1033,18 @@ class PromptBudget(BaseModel):
     @property
     def remaining(self) -> int:
         return max(0, self.max_input_tokens - self.reserved_output_tokens - self.used_tokens)
+
+def ensure_prompt_fits(prompt: str, budget: PromptBudget, label: str) -> None:
+    estimated_tokens = len(prompt) // 4
+    maximum = budget.max_input_tokens - budget.reserved_output_tokens
+    if estimated_tokens > maximum:
+        raise PreflightError(f"{label} excede PromptBudget: {estimated_tokens} > {maximum}")
+
+def add_required_or_fail(budget: PromptBudget, text: str, label: str) -> None:
+    tokens = len(text) // 4
+    if not budget.can_add(tokens):
+        raise PreflightError(f"{label} no cabe en PromptBudget.")
+    budget.add(tokens)
 
 class PromptPayload(BaseModel):
     content: str
@@ -1671,9 +1766,7 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
     )
     
     try:
-        final_tokens = len(prompt) // 4
-        if final_tokens > (budget_contract.max_input_tokens - budget_contract.reserved_output_tokens):
-            raise PreflightError("El prompt final del contrato excede el presupuesto máximo.")
+        ensure_prompt_fits(prompt, budget_contract, "Acceptance Contract")
         response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
         contract = AcceptanceContract.model_validate_json(response.text)
         logging.info("Contrato de Aceptación generado con éxito.")
@@ -1768,7 +1861,9 @@ def write_transactional_metadata(run_id, issue_id, title, success, design, commi
 # =====================================================================
 # FUNCION DE ANALISIS ESTATICO DE CALIDAD (RUFF AUTO-FIX Y VULTURE BLINDADO)
 # =====================================================================
-def run_static_analysis(generated_filepaths: list[str], plan: "QualityGatePlan", test_index: dict[str, "PythonFileSummary"] = None) -> tuple[bool, str]:
+from typing import Collection
+
+def run_static_analysis(generated_filepaths: list[str], plan: "QualityGatePlan", test_paths: Collection[str] | None = None) -> tuple[bool, str]:
     """
     Ejecuta Ruff y/o Vulture según el plan de gates.
     """
@@ -1802,16 +1897,16 @@ def run_static_analysis(generated_filepaths: list[str], plan: "QualityGatePlan",
         # Si se le pasa un set de tests combinados, lo usamos para identificar producción,
         # pero pasamos AMBOS al binario de vulture para que resuelva referencias cruzadas.
         prod_files = []
-        if test_index is not None:
-            prod_files = [f for f in py_files if f not in test_index]
+        if test_paths is not None:
+            prod_files = [f for f in py_files if f not in test_paths]
         else:
             prod_files = [f for f in py_files if not is_test_file(f)]
             
         if prod_files:
             # Añadimos los test paths al análisis de vulture para que vea el uso de los fixtures/mocks
             all_files_to_analyze = prod_files.copy()
-            if test_index:
-                all_files_to_analyze.extend(list(test_index))
+            if test_paths:
+                all_files_to_analyze.extend(list(test_paths))
             logging.info(f"Ejecutando Vulture en {len(all_files_to_analyze)} archivos (prod + tests)...")
             try:
                 result_v = subprocess.run([sys.executable, "-m", "vulture"] + all_files_to_analyze, capture_output=True, text=True, timeout=300)
@@ -2199,20 +2294,12 @@ def validate_contractual_ast(code: str, filepath: str, contract: AcceptanceContr
 
 def build_mypy_scope(generated_files: dict[str, str], repo_context: "RepositoryContext") -> list[str]:
     """Construye el conjunto de archivos Python a verificar con MyPy.
-
-    Prioridad:
-    1. Si el proyecto declara ``mypy_targets`` explícitos en su configuración, se usan como base.
-    2. Si no, se parte de los archivos generados/modificados y se expande al cluster afectado:
-       importers, dependencies, test covers, source targets.
+    Se parte de los archivos generados/modificados y se expande al cluster afectado:
+    importers, dependencies, test covers, source targets.
     Filtros finales: solo ``.py``, sin ``vulture_whitelist.py``.
     """
     def _is_valid(p: str) -> bool:
         return p.endswith(".py") and "vulture_whitelist.py" not in p
-
-    if repo_context.structured_config.mypy_targets:
-        scope = {t for t in repo_context.structured_config.mypy_targets if _is_valid(t)}
-        logging.info(f"MyPy scope desde mypy_targets explicitos: {sorted(scope)}")
-        return list(scope)
 
     all_indices: dict = {**repo_context.source_index, **repo_context.test_index}
     scope: set[str] = set()
@@ -2712,9 +2799,7 @@ def agent_analyze_and_design(title: str, description: str, contract: AcceptanceC
         response_schema=ProjectDesign,
         temperature=0.1
     )
-    final_tokens = len(prompt) // 4
-    if final_tokens > (budget.max_input_tokens - budget.reserved_output_tokens):
-        raise PreflightError("El prompt final del architect excede PromptBudget.")
+    ensure_prompt_fits(prompt, budget, "Technical Design")
     response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
     return json.loads(response.text or "{}")
 
@@ -2728,12 +2813,17 @@ def estimate_repository_context_tokens(repo_context: RepositoryContext, issue_de
     if repo_context.architecture_document:
         toks += len(repo_context.architecture_document) // 4
     
-    toks += len(repo_context.structured_config.model_dump_json()) // 4
-    toks += len(repo_context.quality_policy.model_dump_json()) // 4
+    toks += sum(len(c) // 4 for c in repo_context.project_configuration.values())
     
-    for f, c in repo_context.relevant_source_files.items(): toks += len(c) // 4
-    for f, c in repo_context.relevant_test_files.items(): toks += len(c) // 4
-    for f, c in repo_context.dependency_files.items(): toks += len(c) // 4
+    if hasattr(repo_context, 'structured_config') and repo_context.structured_config:
+        toks += len(repo_context.structured_config.model_dump_json()) // 4
+        
+    if hasattr(repo_context, 'quality_policy') and repo_context.quality_policy:
+        toks += len(repo_context.quality_policy.model_dump_json()) // 4
+    
+    for c in repo_context.relevant_source_files.values(): toks += len(c) // 4
+    for c in repo_context.relevant_test_files.values(): toks += len(c) // 4
+    for c in repo_context.dependency_files.values(): toks += len(c) // 4
     if repo_context.repository_map:
         toks += len(repo_context.repository_map) // 4
         
@@ -2812,6 +2902,10 @@ class PromptContextBuilder:
         for path, code_text in generated_files.items():
             frag = f"\n\n### Archivo: `{path}`\n```python\n{code_text}\n```\n"
             tok = PromptContextBuilder._estimate_tokens(frag)
+            
+            if tok > max_tokens:
+                raise PreflightError(f"El archivo '{path}' excede el tamaño máximo de un lote ({max_tokens} tokens).")
+                
             if current_tokens + tok > max_tokens and content:
                 payloads.append(PromptPayload(content=content, estimated_tokens=current_tokens))
                 content = ""
@@ -2830,6 +2924,10 @@ class PromptContextBuilder:
         for path, code_text in generated_files.items():
             frag = f"\n\nArchivo: '{path}'\n```python\n{code_text}\n```\n"
             tok = PromptContextBuilder._estimate_tokens(frag)
+            
+            if tok > max_tokens:
+                raise PreflightError(f"El archivo '{path}' excede el tamaño máximo de un lote ({max_tokens} tokens).")
+                
             if current_tokens + tok > max_tokens and content:
                 payloads.append(PromptPayload(content=content, estimated_tokens=current_tokens))
                 content = ""
@@ -2873,56 +2971,80 @@ def agent_implement_code(action: dict, file_contract: FileContract, design: dict
     logging.info(f"Procesando '{action['filepath']}' | Operacion: {action['operation']} con {MODEL_LIGHT}...")
     budget = PromptBudget(max_input_tokens=100000, reserved_output_tokens=8000)
     
-    # Priority 1: FileContract
-    file_contract_json = file_contract.model_dump_json(indent=2)
-    p1_toks = len(file_contract_json) // 4
-    if not budget.can_add(p1_toks):
-        raise PreflightError("FileContract excede el presupuesto del Coder.")
-    budget.add(p1_toks)
+    # Priority 1: Instrucciones fijas del agente / wrapper obligatorio
+    fixed_instructions = """
+    Actuas como un Software Engineer.
     
-    # Priority 2: Action details
-    action_str = f"filepath: {action.get('filepath')}\noperation: {action.get('operation')}\nsignatures: {action.get('signatures')}\ninstructions: {action.get('instructions')}"
-    p2_toks = len(action_str) // 4
+    Tus directrices y prioridades son claras:
+    - El FileContract es OBLIGATORIO y prevalece frente a instrucciones inferiores.
+    - Debes devolver el contenido COMPLETO final del archivo, sin explicaciones adicionales fuera del bloque de codigo.
+    - Si la operacion es MODIFY, parte del codigo existente provisto y preserva todo el comportamiento no afectado por el cambio.
+    
+    FileContract: 
+    Action: 
+    Codigo Actual: 
+    Feedback: 
+    Contexto Dinamico: 
+    Dependencias y Generados: 
+    """
+    fixed_toks = len(fixed_instructions) // 4
+    if not budget.can_add(fixed_toks):
+        raise PreflightError("Instrucciones fijas exceden el presupuesto del Coder.")
+    budget.add(fixed_toks)
+    
+    # Priority 2: FileContract
+    file_contract_json = file_contract.model_dump_json(indent=2)
+    p2_toks = len(file_contract_json) // 4
     if not budget.can_add(p2_toks):
-        raise PreflightError("La instruccion de accion excede el presupuesto del Coder.")
+        raise PreflightError("FileContract excede el presupuesto del Coder.")
     budget.add(p2_toks)
     
-    # Priority 3: Existing code (if MODIFY)
+    # Priority 3: Action details
+    action_str = f"filepath: {action.get('filepath')}\noperation: {action.get('operation')}\nsignatures: {action.get('signatures')}\ninstructions: {action.get('instructions')}"
+    p3_toks = len(action_str) // 4
+    if not budget.can_add(p3_toks):
+        raise PreflightError("La instruccion de accion excede el presupuesto del Coder.")
+    budget.add(p3_toks)
+    
+    # Priority 4: Existing code (if MODIFY)
     existing_code = ""
     filepath = action.get('filepath')
     if action.get('operation') == 'MODIFY':
-        existing_code = repo_context.source_index.get(filepath, type('mock', (), {'content': ''})).content if hasattr(repo_context.source_index.get(filepath), 'content') else ""
-        if not existing_code and filepath in repo_context.relevant_source_files:
-            existing_code = repo_context.relevant_source_files[filepath]
-        p3_toks = len(existing_code) // 4
-        if not budget.can_add(p3_toks):
+        existing_code = context_manager.get_file_content(action["filepath"])
+        p4_toks = len(existing_code) // 4
+        if not budget.can_add(p4_toks):
             raise PreflightError(f"El codigo existente de {filepath} excede el presupuesto del Coder.")
-        budget.add(p3_toks)
+        budget.add(p4_toks)
         
-    # Priority 4: Feedback
-    p4_toks = len(feedback) // 4
-    if not budget.can_add(p4_toks):
+    # Priority 5: Feedback
+    p5_toks = len(feedback) // 4
+    if not budget.can_add(p5_toks):
         feedback = feedback[:budget.remaining * 4]
         logging.warning("Feedback truncado en Coder.")
-    budget.add(len(feedback) // 4)
+    if feedback:
+        budget.add(len(feedback) // 4)
     
-    # Priority 5: Dynamic Context (from Architect)
+    # Priority 6: Dynamic Context (from Architect)
     context_str = json.dumps(design.get('context', {}))
-    p5_toks = len(context_str) // 4
-    if budget.can_add(p5_toks):
-        budget.add(p5_toks)
+    p6_toks = len(context_str) // 4
+    if budget.can_add(p6_toks):
+        budget.add(p6_toks)
     else:
         context_str = "{}"
         
-    # Priority 6: Dependencies and Generated
+    # Priority 7: Dependencies and Generated
     # We use build_for_coder which we assume respects budget.remaining
     # For simplicity, we just pass budget.remaining to build_for_coder
     payload = PromptContextBuilder.build_for_coder(action, design, generated_so_far, repo_context, context_manager, budget)
     dep_gen_str = payload.content
-    budget.add(len(dep_gen_str) // 4)
     
     prompt = f"""
     Actuas como un Software Engineer.
+    
+    Tus directrices y prioridades son claras:
+    - El FileContract es OBLIGATORIO y prevalece frente a instrucciones inferiores.
+    - Debes devolver el contenido COMPLETO final del archivo, sin explicaciones adicionales fuera del bloque de codigo.
+    - Si la operacion es MODIFY, parte del codigo existente provisto y preserva todo el comportamiento no afectado por el cambio.
     
     FileContract: {file_contract_json}
     Action: {action_str}
@@ -2932,15 +3054,13 @@ def agent_implement_code(action: dict, file_contract: FileContract, design: dict
     Dependencias y Generados: {dep_gen_str}
     """
     
-    final_tokens = len(prompt) // 4
-    if final_tokens > (budget.max_input_tokens - budget.reserved_output_tokens):
-        raise PreflightError("El prompt final del coder excede PromptBudget.")
+    ensure_prompt_fits(prompt, budget, "Coder")
     import os
     _, ext = os.path.splitext(action["filepath"])
     LANGUAGE_BY_EXTENSION = {
-        ".py": "python", ".js": "javascript", ".ts": "typescript",
-        ".html": "html", ".css": "css", ".json": "json",
-        ".yml": "yaml", ".yaml": "yaml", ".md": "markdown"
+        ".py": "python", ".json": "json", ".ini": "ini",
+        ".cfg": "ini", ".toml": "toml", ".yaml": "yaml",
+        ".yml": "yaml", ".md": "markdown"
     }
     response = runtime.ai_client.models.generate_content(
         model=MODEL_LIGHT,
@@ -2994,27 +3114,59 @@ def agent_generate_tests(action: dict, file_contract: FileContract, generated_so
     logging.info(f"Disenando suite de pruebas unitarias para '{action['filepath']}'...")
 
     budget = PromptBudget(max_input_tokens=128000, reserved_output_tokens=8192)
-    payload = PromptContextBuilder.build_for_tests(action, generated_so_far, repo_context, context_manager, budget)
-    contexto_dinamico = payload.content
 
-    existing_test_code = ""
-    if action["operation"].upper() == "MODIFY":
-        existing_test_code = context_manager.get_file_content(action["filepath"])
-
+    # Priority 1: Issue
+    add_required_or_fail(budget, issue_desc, "Issue desc en Test Generator")
+    
+    # Priority 2: FileContract
     file_contract_json = file_contract.model_dump_json(indent=2)
+    add_required_or_fail(budget, file_contract_json, "FileContract en Test Generator")
+    
+    # Priority 3: framework
+    add_required_or_fail(budget, framework, "Framework")
+    
+    # Priority 4: filepath/operation
+    add_required_or_fail(budget, action['filepath'] + action['operation'], "Filepath/Operation")
+    
+    # Priority 5: signatures
+    add_required_or_fail(budget, action.get("signatures", ""), "Signatures")
+    
+    # Priority 6: instructions
+    add_required_or_fail(budget, action.get("instructions", ""), "Instructions")
+    
+    # Priority 7, 8, 9: mocking, typing, exports
     mocking_instruction = resolve_mocking_instruction(framework, file_contract, repo_context)
-
-    # Regla dinámica de tipado
     if repo_context.quality_policy.require_argument_annotations:
         typing_instruction = "2. TIPADO ESTRICTO OBLIGATORIO: Todas las funciones de test y los argumentos (incluyendo los mocks inyectados por `@patch`) deben tener type hints (ej. `def test_algo(mock_obj: Mock) -> None:`)."
     else:
         typing_instruction = "2. TIPADO FLEXIBLE: Respeta la convención de tipado existente en los tests (no exijas type hints si no son prevalentes)."
 
-    # Regla dinámica de exports
     if repo_context.quality_policy.require_explicit_exports or file_contract.required_exports:
         exports_instruction = "3. TESTEO EXHAUSTIVO DE INTERFACES PÚBLICAS: Es obligatorio importar, instanciar y usar explícitamente todas las clases o funciones declaradas en la variable '__all__' del archivo de producción objetivo para reducir la tasa de código muerto de Vulture a 0%."
     else:
         exports_instruction = "3. TESTEO ENFOCADO: Evalúa el contrato y los requerimientos sin obligatoriedad de referenciar __all__."
+
+    add_required_or_fail(budget, mocking_instruction + typing_instruction + exports_instruction, "Reglas de test")
+    
+    # Priority 10: existing_test_code (si MODIFY)
+    existing_test_code = ""
+    if action["operation"].upper() == "MODIFY":
+        existing_test_code = context_manager.get_file_content(action["filepath"])
+        add_required_or_fail(budget, existing_test_code, "Existing Test Code")
+        
+    # Priority 11: fixed instructions
+    add_required_or_fail(budget, "Escribe una suite de pruebas unitarias exhaustiva con framework para validar el archivo: REQUISITOS ORIGINALES DEL ISSUE (FUENTE DE VERDAD SUPERIOR): CONTRATO DE ARCHIVO (REGLAS OBLIGATORIAS PARA ESTE ARCHIVO DE TEST): FIRMAS PROPUESTAS POR EL ARQUITECTO: INSTRUCCIONES ESPECÍFICAS DEL ARCHIVO: Las instrucciones del arquitecto están subordinadas al Issue original y al Contrato. Si existe una contradicción, prevalece el Contrato. CONTEXTO DINÁMICO RELEVANTE: ESTÁNDARES DE DISEÑO DE TESTING INDUSTRIAL: INDEPENDENCIA Y AISLAMIENTO: Devuelve UNICAMENTE el codigo en un bloque markdown", "Instrucciones fijas")
+    
+    # Priority: feedback
+    if feedback:
+        if not budget.can_add(len(feedback) // 4):
+            feedback = feedback[:budget.remaining * 4]
+            logging.warning("Feedback truncado en Test Generator.")
+        budget.add(len(feedback) // 4)
+    
+    # Priority: Contexto Dinámico
+    payload = PromptContextBuilder.build_for_tests(action, generated_so_far, repo_context, context_manager, budget)
+    contexto_dinamico = payload.content
 
     prompt = f"""
     Escribe una suite de pruebas unitarias exhaustiva con '{framework}' para validar el archivo: '{action['filepath']}'
@@ -3054,6 +3206,7 @@ def agent_generate_tests(action: dict, file_contract: FileContract, generated_so
 
     Devuelve UNICAMENTE el codigo de '{framework}' en un bloque markdown usando {MD_FENCE}python.
     """
+    ensure_prompt_fits(prompt, budget, "Test Generator")
     response = runtime.ai_client.models.generate_content(model=MODEL_LIGHT, contents=prompt, config=types.GenerateContentConfig(temperature=0.0))
     return extract_code(response.text, "python")
 
@@ -3161,16 +3314,26 @@ def agent_security_audit(
         - Contrato Canonico (Reglas de Arquitectura): {contract_str}
         - Configuracion Estructurada Completa: {config_str}
         - Dependencias (Prod/Dev): {deps_str}
+        - Diseño Arquitectónico:
+        {design_compact}
+        - Evidencia de Dependencias:
+        {dep_json}
         - Documento de Arquitectura Base: {arch_doc}
         - Conflictos de Arquitectura Detectados Previos: {conflicts}
         - Grafo de Coherencia de Imports: {graph_str}
     """
 
     available_chunk_tokens = budget.remaining - 2000 # leave buffer for fixed prompt wrapper
-    if available_chunk_tokens < 1000:
-        available_chunk_tokens = 1000
+    if available_chunk_tokens <= 0:
+        return SecurityAuditResult(approved=False, findings=["Sin presupuesto para procesar lotes de auditoria."])
 
-    payloads = PromptContextBuilder.build_for_audit(generated_files, max_tokens=available_chunk_tokens)
+    try:
+        payloads = PromptContextBuilder.build_for_audit(generated_files, max_tokens=available_chunk_tokens)
+    except PreflightError as e:
+        return SecurityAuditResult(approved=False, findings=[str(e)])
+    except Exception as e:
+        return SecurityAuditResult(approved=False, findings=[f"Fallo al construir chunks de auditoria: {e}"])
+        
     for i, payload in enumerate(payloads):
         prompt = base_prompt + f"""
         Archivos Generados (Lote {i+1} de {len(payloads)}):
@@ -3190,6 +3353,7 @@ def agent_security_audit(
             temperature=0.0
         )
         try:
+            ensure_prompt_fits(prompt, budget, "Security Audit Chunk")
             response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
             cleaned_json = extract_code(response.text, "json")
             result = SecurityAuditResult.model_validate_json(cleaned_json)
@@ -3205,31 +3369,84 @@ def agent_generate_execution_report(design: dict, generated_files: dict[str, str
     logging.info(f"Compilando reporte de ejecucion para Issue #{issue_id}...")
     budget = PromptBudget(max_input_tokens=100000, reserved_output_tokens=4000)
     
-    base_str = f"Title/Issue: {title}\nArchitecture Justification: {architecture_justification}\nSAST: {sast_report}\nGenerated Files: {list(generated_files.keys())}"
-    base_toks = len(base_str) // 4
-    if not budget.can_add(base_toks):
-        raise PreflightError("Base execution report context exceeds budget.")
-    budget.add(base_toks)
+    # Priority 1: Issue/title
+    add_required_or_fail(budget, title, "Issue/title")
     
-    log_toks = len(pytest_log) // 4
-    if not budget.can_add(log_toks):
-        # Truncate logs preserving FAILED, ERROR, tracebacks, last lines
-        lines = pytest_log.split('\n')
-        important = [l for l in lines if 'FAILED' in l or 'ERROR' in l or 'Traceback' in l]
-        last_lines = lines[-50:]
-        pytest_log = "\n".join(important + ["..."] + last_lines)
-        if not budget.can_add(len(pytest_log) // 4):
-            pytest_log = pytest_log[-budget.remaining * 4:]
-    budget.add(len(pytest_log) // 4)
+    # Priority 2: architecture_justification
+    architecture_justification = design.get("architecture_justification", "[no disponible]")
+    add_required_or_fail(budget, architecture_justification, "Architecture Justification")
+    
+    # Priority 3: fixed instructions
+    fixed_instructions = "Actúas como un ingeniero de release. Genera un reporte Markdown detallado del ciclo de ejecución. Incluye el título, la justificación de la arquitectura, resumen de dependencias/archivos modificados, resumen de calidad estática, y análisis de fallos en tests si los hay."
+    add_required_or_fail(budget, fixed_instructions, "Fixed Instructions")
+    
+    # Priority 4: resumen de tests fallidos/errores
+    lines = pytest_log.split('\n')
+    important_failures = [l for l in lines if 'FAILED' in l or 'ERROR' in l]
+    important_tracebacks = [l for l in lines if 'Traceback' in l]
+    
+    test_summary_parts = []
+    
+    # 1. FAILED / ERROR representativos
+    failures_str = "\n".join(important_failures)
+    if not budget.can_add(len(failures_str) // 4):
+        failures_str = failures_str[:max(0, budget.remaining * 4 - 100)] + "\n... [TRUNCADO FALLOS]"
+    if failures_str:
+        budget.add(len(failures_str) // 4)
+        test_summary_parts.append(failures_str)
+        
+    # 2. tracebacks relacionados
+    tb_str = "\n".join(important_tracebacks)
+    if tb_str and budget.remaining > 0:
+        if not budget.can_add(len(tb_str) // 4):
+            tb_str = tb_str[:max(0, budget.remaining * 4 - 100)] + "\n... [TRUNCADO TRACEBACKS]"
+        budget.add(len(tb_str) // 4)
+        test_summary_parts.append(tb_str)
+        
+    test_summary = "\n".join(test_summary_parts)
+    
+    # Priority 5: resumen Security/SAST
+    # Ensure SAST doesn't blow up if it's somehow huge, though normally it's small. We'll add_required_or_fail or truncate.
+    if not budget.can_add(len(sast_report) // 4):
+        sast_report = sast_report[:budget.remaining * 4]
+    budget.add(len(sast_report) // 4)
+    
+    # Priority 6: manifest
+    manifest_str = str(list(generated_files.keys()))
+    add_required_or_fail(budget, manifest_str, "Manifest")
+    
+    # Priority 7: contenido real de generated_files que quepa
+    payload = PromptContextBuilder.build_for_report(generated_files, budget)
+    content_str = payload.content
+    
+    # Priority 8: resto de logs
+    resto_logs = "\n".join(lines[-50:])
+    if resto_logs and budget.remaining > 0:
+        if not budget.can_add(len(resto_logs) // 4):
+            resto_logs = resto_logs[-budget.remaining * 4:]
+        budget.add(len(resto_logs) // 4)
+    else:
+        resto_logs = ""
     
     prompt = f"""
-    {base_str}
-    Pytest Log: {pytest_log}
+    {fixed_instructions}
+    
+    Title/Issue: {title}
+    Architecture Justification: {architecture_justification}
+    SAST: {sast_report}
+    Generated Files Manifest: {manifest_str}
+    
+    Content of generated files:
+    {content_str}
+    
+    Test Failures/Errors:
+    {test_summary}
+    
+    Test Tail Logs:
+    {resto_logs}
     """
     
-    final_tokens = len(prompt) // 4
-    if final_tokens > (budget.max_input_tokens - budget.reserved_output_tokens):
-        raise PreflightError("Execution report prompt exceeds PromptBudget.")
+    ensure_prompt_fits(prompt, budget, "Execution Report")
     response = runtime.ai_client.models.generate_content(model=MODEL_LIGHT, contents=prompt)
     os.makedirs("docs/reports", exist_ok=True)
     report_path = f"docs/reports/run_issue_{issue_id}.md"
@@ -3256,50 +3473,84 @@ def agent_update_architecture_doc(
     MAX_INPUT = 80000
     RESERVED_OUTPUT = 8192
     budget = PromptBudget(max_input_tokens=MAX_INPUT, reserved_output_tokens=RESERVED_OUTPUT)
-
-    FIXED_INSTRUCTIONS_TOKENS = 800
-    budget.add(FIXED_INSTRUCTIONS_TOKENS)
-
-    meta = f"Issue: #{issue_id} - {title}\nDescripcion: {description}"
-    budget.add(len(meta) // 4)
-
-    GIT_DIFF_MAX = 4000
-    if (len(git_diff) // 4) > GIT_DIFF_MAX:
-        git_diff_text = git_diff[:GIT_DIFF_MAX * 4] + "\n... [DIFF TRUNCADO]"
-        logging.warning("git_diff truncado a 4000 tokens para el agente de arquitectura.")
-    else:
-        git_diff_text = git_diff or "[Sin diff disponible]"
-    budget.add(len(git_diff_text) // 4)
-
-    final_manifest_list = list(generated_files.keys())
-    manifest_text = repr(final_manifest_list)
-    budget.add(len(manifest_text) // 4)
-
-    gate_summary = repr(
-        [{"name": g.name, "passed": g.passed, "executed": g.executed} for g in gate_results]
-    )
-    if budget.can_add(len(gate_summary) // 4): budget.add(len(gate_summary) // 4)
-    else: gate_summary = ""
-
-    ARCH_DOC_MAX = 8000
-    arch_tok = len(current_arch_doc) // 4 if current_arch_doc else 0
-    if arch_tok > ARCH_DOC_MAX:
-        arch_display = current_arch_doc[:ARCH_DOC_MAX * 4] + "\n... [ARQUITECTURA TRUNCADA]"
-        logging.warning("current_arch_doc truncado a 8000 tokens para el agente de arquitectura.")
-    else:
-        arch_display = current_arch_doc or "[El documento esta vacio. Debes crearlo desde cero.]"
-    budget.add(len(arch_display) // 4)
-
-    arch_just = design.get("architecture_justification", "[no disponible]")
-    arch_just_tok = len(arch_just) // 4
-    if not budget.can_add(arch_just_tok):
-        arch_just = "[justificacion omitida por presupuesto]"
-    else:
-        budget.add(arch_just_tok)
-
-    prompt = f"""
+    
+    # Priority 1: Fixed Instructions
+    fixed_instructions = """
     Actuas como un Arquitecto de Soluciones que mantiene el documento 'docs/ARCHITECTURE.md' actualizado.
     Tu tarea es actualizar el documento basandote en la evidencia real de los cambios, no solo en la intencion del diseno.
+    INSTRUCCIONES:
+    1.  **Actualiza con Evidencia**: Tu principal fuente de verdad es el 'DIFF REAL'. Usalo para entender que interfaces, dependencias y logicas cambiaron realmente.
+    2.  **Manten la Estructura**: El documento DEBE seguir esta estructura de 9 secciones.
+        1.  `# 1. Vision General del Sistema`
+        2.  `# 2. Catalogo de Componentes`
+        3.  `# 3. Interfaces Publicas y Contratos`
+        4.  `# 4. Flujos de Datos`
+        5.  `# 5. Dependencias Externas`
+        6.  `# 6. Convenciones de Calidad y Pruebas`
+        7.  `# 7. Restricciones Actuales`
+        8.  `# 8. Registro de Decisiones de Arquitectura (ADR)`: Crea un nuevo ADR para esta ejecucion.
+        9.  `# 9. Historial de Cambios por Issue`: Anade una entrada concisa.
+    Devuelve UNICAMENTE el Markdown definitivo.
+    """
+    try:
+        add_required_or_fail(budget, fixed_instructions, "Instrucciones fijas en Architecture Updater")
+    except PreflightError as e:
+        logging.error(f"Fallo en agente arquitectura: {e}")
+        raise
+
+    # Priority 2: Git Diff
+    git_diff_text = git_diff or "[Sin diff disponible]"
+    diff_toks = len(git_diff_text) // 4
+    if not budget.can_add(diff_toks):
+        trunc_msg = "\n... [DIFF TRUNCADO]"
+        avail = max(0, budget.remaining * 4 - len(trunc_msg) * 4)
+        git_diff_text = git_diff_text[:avail] + trunc_msg
+        logging.warning("git_diff truncado en Architecture Updater")
+        if git_diff_text: budget.add(len(git_diff_text) // 4)
+    else:
+        budget.add(diff_toks)
+
+    # Priority 3: Manifest
+    manifest_text = repr(list(generated_files.keys()))
+    if not budget.can_add(len(manifest_text) // 4):
+        manifest_text = "[Manifiesto omitido]"
+    else:
+        budget.add(len(manifest_text) // 4)
+        
+    # Priority 4: Gate Summary
+    gate_summary = repr([{"name": g.name, "passed": g.passed, "executed": g.executed} for g in gate_results])
+    if not budget.can_add(len(gate_summary) // 4):
+        gate_summary = "[Gate summary omitido]"
+    else:
+        budget.add(len(gate_summary) // 4)
+
+    # Priority 5: Issue
+    meta = f"Issue: #{issue_id} - {title}\nDescripcion: {description}"
+    if not budget.can_add(len(meta) // 4):
+        meta = "[Issue omitido]"
+    else:
+        budget.add(len(meta) // 4)
+
+    # Priority 6: Current Architecture
+    arch_display = current_arch_doc or "[El documento esta vacio. Debes crearlo desde cero.]"
+    arch_toks = len(arch_display) // 4
+    if not budget.can_add(arch_toks):
+        trunc_msg = "\n... [ARQUITECTURA TRUNCADA]"
+        avail = max(0, budget.remaining * 4 - len(trunc_msg) * 4)
+        arch_display = arch_display[:avail] + trunc_msg
+        if arch_display: budget.add(len(arch_display) // 4)
+    else:
+        budget.add(arch_toks)
+
+    # Priority 7: Architecture Justification
+    arch_just = design.get("architecture_justification", "[no disponible]")
+    if not budget.can_add(len(arch_just) // 4):
+        arch_just = "[Justificacion omitida]"
+    else:
+        budget.add(len(arch_just) // 4)
+
+    prompt = f"""
+    {fixed_instructions}
 
     EVIDENCIA DE CAMBIOS REALIZADOS EN ESTA EJECUCION:
     - {meta}
@@ -3317,27 +3568,29 @@ def agent_update_architecture_doc(
     ---
     {arch_display}
     ---
-
-    INSTRUCCIONES:
-    1.  **Actualiza con Evidencia**: Tu principal fuente de verdad es el 'DIFF REAL'. Usalo para entender que interfaces, dependencias y logicas cambiaron realmente.
-    2.  **Manten la Estructura**: El documento DEBE seguir esta estructura de 9 secciones.
-        1.  `# 1. Vision General del Sistema`
-        2.  `# 2. Catalogo de Componentes`
-        3.  `# 3. Interfaces Publicas y Contratos`
-        4.  `# 4. Flujos de Datos`
-        5.  `# 5. Dependencias Externas`
-        6.  `# 6. Convenciones de Calidad y Pruebas`
-        7.  `# 7. Restricciones Actuales`
-        8.  `# 8. Registro de Decisiones de Arquitectura (ADR)`: Crea un nuevo ADR para esta ejecucion.
-        9.  `# 9. Historial de Cambios por Issue`: Anade una entrada concisa.
-
-    Devuelve UNICAMENTE el Markdown definitivo.
     """
-    response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt)
-    os.makedirs("docs", exist_ok=True)
-    with open(arch_file, "w", encoding="utf-8") as f:
-        f.write((response.text or "").strip())
-    return arch_file
+    
+    try:
+        ensure_prompt_fits(prompt, budget, "Architecture Updater")
+        response = runtime.ai_client.models.generate_content(
+            model=MODEL_HEAVY,
+            contents=prompt,
+        )
+        updated_doc = extract_code(response.text or "", "markdown")
+        if not updated_doc:
+            updated_doc = (response.text or "").strip()
+        
+        # Write to file
+        full_path = os.path.join(repo_context.repository_map.get("root", "."), arch_file)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(updated_doc)
+            
+        logging.info(f"Documento de arquitectura actualizado y guardado en {arch_file}.")
+        return arch_file
+    except Exception as e:
+        logging.error(f"Fallo al invocar agente de arquitectura: {e}")
+        raise PreflightError(f"Error generando documento de arquitectura: {e}")
 
 def agent_update_user_manual(issue_id: int, title: str, description: str, design: dict, generated_files: dict[str, str], runtime: RuntimeClients) -> str:
     logging.info(f"Evaluando impacto operativo del Issue #{issue_id} en el Manual de Usuario...")
@@ -3345,23 +3598,44 @@ def agent_update_user_manual(issue_id: int, title: str, description: str, design
     existing_content = open(manual_path, "r", encoding="utf-8").read() if os.path.exists(manual_path) else "[Vacio]"
     budget = PromptBudget(max_input_tokens=100000, reserved_output_tokens=8000)
     
-    p1 = f"Issue: {title}\nDesc: {issue_desc}\nGenerated: {list(generated_files.keys())}"
-    if not budget.can_add(len(p1) // 4): return existing_content
-    budget.add(len(p1) // 4)
-    
-    if not budget.can_add(len(existing_content) // 4):
-        logging.warning("User manual excede el budget, devolviendo el original.")
-        return existing_content
-    budget.add(len(existing_content) // 4)
-    
-    prompt = f"""
-    {p1}
-    Existing: {existing_content}
-    """
-    
-    final_tokens = len(prompt) // 4
-    if final_tokens > (budget.max_input_tokens - budget.reserved_output_tokens):
-        return existing_content
+    try:
+        # Priority 1: Issue
+        add_required_or_fail(budget, title, "Issue title en User Manual")
+        
+        # Priority 2: description
+        add_required_or_fail(budget, description, "Issue desc en User Manual")
+        
+        # Priority 3: fixed instructions
+        fixed_instructions = "Actúas como Technical Writer. Tu tarea es analizar los cambios generados y decidir si impactan la operatividad del usuario final. Si no hay impacto (ej. refactor interno, test), devuelve exactamente el mismo contenido original. Si hay impacto, actualiza el manual de forma incremental, explicando las nuevas funciones sin jerga de implementación. Devuelve el Markdown final completo."
+        add_required_or_fail(budget, fixed_instructions, "Instrucciones fijas en User Manual")
+        
+        # Priority 4: existing manual
+        add_required_or_fail(budget, existing_content, "Existing manual")
+        
+        # Priority 5: cambios generados
+        payload = PromptContextBuilder.build_for_docs(design, generated_files, budget)
+        cambios_str = payload.content
+        
+        prompt = f"""
+        {fixed_instructions}
+        
+        ISSUE:
+        {title}
+        {description}
+        
+        MANUAL ACTUAL:
+        {existing_content}
+        
+        CAMBIOS GENERADOS:
+        {cambios_str}
+        
+        Devuelve UNICAMENTE el contenido actualizado en Markdown.
+        """
+        
+        ensure_prompt_fits(prompt, budget, "User Manual")
+    except PreflightError as e:
+        logging.warning(f"User manual omitido por presupuesto: {e}")
+        return manual_path
     response = runtime.ai_client.models.generate_content(
         model=MODEL_HEAVY, contents=prompt,
         config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=1024), temperature=0.2)
@@ -3378,33 +3652,104 @@ def agent_update_user_manual(issue_id: int, title: str, description: str, design
 # =====================================================================
 def agent_analyze_pipeline_failure(issue_id: int, title: str, description: str, design: dict, generated_files: dict[str, str], gate_results: list[GateResult], runtime: RuntimeClients) -> str:
     logging.warning("El ciclo colapsó. Invocando Diagnóstico Clínico de IA...")
-    contexto_archivos = "".join([f"\n### Archivo: `{path}`\n{MD_FENCE}python\n{code}\n{MD_FENCE}\n" for path, code in generated_files.items()])
-    gate_report = "\n".join([f"- Gate: {g.name}, Executed: {g.executed}, Passed: {g.passed}\nOutput:\n{g.output}" for g in gate_results])
-
-    prompt = f"""
+    budget = PromptBudget(max_input_tokens=100000, reserved_output_tokens=4000)
+    
+    # Priority 1: Instrucciones de gobernanza
+    gobernanza = """
     Actúas como un Ingeniero Principal de DevOps y Experto en Diagnóstico de Agentes. El pipeline falló tras agotar los reintentos de calidad.
     Realiza una autopsia técnica y emite un reporte Markdown detallado sobre qué causó el bloqueo.
     
-    Contexto: Issue #{issue_id}: '{title}' | Spec: {description}
-    CÓDIGO GENERADO: {contexto_archivos}
-    
-    RESULTADOS DE LOS QUALITY GATES:
-    {gate_report}
+    Se preservarán siempre las secciones:
+    - FALLO OBSERVADO
+    - RIESGO INFERIDO
+    - RECOMENDACIÓN PREVENTIVA
 
-    Escribe el Reporte Clínico en Markdown con Análisis de Causa Raíz y Recomendación Inmediata al humano.
-    Usa únicamente los resultados incluidos en GATE_RESULTS. No atribuyas fallos a una fase con executed=false.
-    Distingue explícitamente:
-    - FALLO OBSERVADO (basado en un gate con passed=false)
-    - RIESGO INFERIDO (tu análisis sobre el código que podría haber causado el fallo)
-    - RECOMENDACIÓN PREVENTIVA (sugerencias para el futuro)
-
-    🚨 INSTRUCCIÓN CRÍTICA DE GOBERNANZA AUTOMATIZADA 🚨:
-    Si determinas que la causa raíz del fallo NO es un mero despiste tipográfico de sintaxis, sino que el Agente Coder necesita directrices explícitas en los Criterios de Aceptación Técnicos para superar una barrera estricta o trampa de herramientas (ej. inyectar comentarios de bypass como '# vulture: ignore', modificar firmas específicas o mitigar asimetrías de testing), DEBES incluir obligatoriamente la siguiente etiqueta exacta en una línea independiente al final de tu reporte:
-    [ACTION: DELEGATE_TO_PO]
-    
-    Si el error es puramente técnico subsanable sin alterar las especificaciones, omite la etiqueta.
+    🚨 INSTRUCCIÓN CRÍTICA DE DELEGACIÓN 🚨:
+    - Si el fallo es puramente técnico y puede corregirse sin modificar Issue, requisitos, AcceptanceContract, criterios de aceptación o decisiones estructurales: DEBE OMITIR `[ACTION: DELEGATE_TO_PO]`.
+    - Si superar el fallo requiere modificar, aclarar o refinar requisitos funcionales, Issue, AcceptanceContract, criterios de aceptación o decisiones estructurales: DEBE INCLUIR obligatoriamente la etiqueta exacta `[ACTION: DELEGATE_TO_PO]` en una línea independiente al final de tu reporte.
     """
+    add_required_or_fail(budget, gobernanza, "Gobernanza Post-Mortem")
+    
+    # Priority 2: Contexto del Issue
+    issue_ctx = f"Issue #{issue_id}: '{title}' | Spec: {description}"
+    add_required_or_fail(budget, issue_ctx, "Issue en Post-Mortem")
+    
+    failed_gates = [g for g in gate_results if not g.passed]
+    
+    # Priority 3: Sumarios de gates fallidos
+    failed_summaries = "\n".join([f"- Gate Fallido: {g.name}" for g in failed_gates])
+    add_required_or_fail(budget, failed_summaries, "Failed Gates Summaries")
+    
+    # Priority 4: Outputs de gates fallidos acotados
+    failed_outputs = ""
+    for g in failed_gates:
+        out = f"\n[Output de {g.name}]\n{g.output}\n"
+        if not budget.can_add(len(out) // 4):
+            out = out[:max(0, budget.remaining * 4 - 100)] + "\n... [TRUNCADO OUTPUT]"
+        if out:
+            budget.add(len(out) // 4)
+            failed_outputs += out
+            
+    # Extraer archivos relacionados buscando menciones directas en outputs
+    related_files = []
+    other_files = []
+    for path in generated_files:
+        if path in failed_outputs:
+            related_files.append(path)
+        else:
+            other_files.append(path)
+            
+    # Priority 5: Archivos generados relacionados
+    rel_files_str = ""
+    for path in related_files:
+        code = generated_files[path]
+        f_str = f"\n### Archivo Relacionado: `{path}`\n{MD_FENCE}python\n{code}\n{MD_FENCE}\n"
+        if not budget.can_add(len(f_str) // 4):
+            f_str = f_str[:max(0, budget.remaining * 4 - 100)] + f"\n{MD_FENCE}\n... [TRUNCADO ARCHIVO]"
+        if f_str:
+            budget.add(len(f_str) // 4)
+            rel_files_str += f_str
+            
+    # Priority 6: Resto de archivos generados
+    oth_files_str = ""
+    for path in other_files:
+        code = generated_files[path]
+        f_str = f"\n### Archivo Adicional: `{path}`\n{MD_FENCE}python\n{code}\n{MD_FENCE}\n"
+        if not budget.can_add(len(f_str) // 4):
+            f_str = f_str[:max(0, budget.remaining * 4 - 100)] + f"\n{MD_FENCE}\n... [TRUNCADO ARCHIVO]"
+        if f_str:
+            budget.add(len(f_str) // 4)
+            oth_files_str += f_str
+            
+    # Priority 7: Resumen de gates exitosos
+    passed_gates = [g for g in gate_results if g.passed]
+    passed_gates_str = "\n".join([f"- Gate Exitoso: {g.name}" for g in passed_gates])
+    if budget.can_add(len(passed_gates_str) // 4):
+        budget.add(len(passed_gates_str) // 4)
+    else:
+        passed_gates_str = ""
+        
+    prompt = f"""
+    {gobernanza}
+    
+    Contexto: {issue_ctx}
+    
+    GATES FALLIDOS (CAUSA DEL BLOQUEO):
+    {failed_summaries}
+    {failed_outputs}
+    
+    CÓDIGO GENERADO RELACIONADO:
+    {rel_files_str}
+    
+    RESTO DEL CÓDIGO GENERADO:
+    {oth_files_str}
+    
+    GATES EXITOSOS (CONTEXTO):
+    {passed_gates_str}
+    """
+    
     try:
+        ensure_prompt_fits(prompt, budget, "Post-Mortem")
         response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt)
         logging.error(f"REPORTE DE AUTODIAGNÓSTICO POST-MORTEM:\n{(response.text or "").strip()}")
         return (response.text or "").strip()
@@ -3426,11 +3771,13 @@ def build_coherence_summary(
         virtual_index[path] = summary.model_copy()
         
     for path, code in generated_files.items():
-        entry = {"signatures": {}, "imports": [], "imported_files": [], "imported_by": []}
+        entry = {"signatures": {}, "imports": [], "imported_files": [], "imported_by": [], "_extracted_modules": []}
         try:
             tree = _ast.parse(code, filename=path)
             # simulate extract_ast_signatures
             entry["signatures"] = extract_ast_signatures(tree)
+            mod_name = path.replace("\\", "/").replace(".py", "").replace("/", ".")
+            entry["_extracted_modules"] = extract_imported_modules(tree, mod_name)
             for node in _ast.walk(tree):
                 if isinstance(node, (_ast.Import, _ast.ImportFrom)):
                     try:
@@ -3444,25 +3791,25 @@ def build_coherence_summary(
         class MockSummary:
             def __init__(self, **kwargs):
                 for k,v in kwargs.items(): setattr(self, k, v)
-        virtual_index[path] = MockSummary(signatures=entry["signatures"], imports=entry["imports"], imported_files=[], imported_by=[], model_copy=lambda: None)
+        virtual_index[path] = MockSummary(signatures=entry["signatures"], imports=entry["imports"], imported_files=[], imported_by=[], _extracted_modules=entry["_extracted_modules"], model_copy=lambda: None)
 
     # 2. Re-calculate imported_files and imported_by for the WHOLE virtual index
-    def get_module_name(p):
-        return p.replace("\\", "/").replace(".py", "").replace("/", ".")
+    all_py_files = list(virtual_index.keys())
     
-    path_to_mod = {p: get_module_name(p) for p in virtual_index.keys()}
-    
+    # Update imported_files for generated files
+    for p in generated_files:
+        idx = virtual_index[p]
+        idx.imported_files = resolve_imported_files(getattr(idx, "_extracted_modules", []), "", all_py_files)
+        
+    # Reconstruct imported_by for the WHOLE virtual index
     for p, idx in virtual_index.items():
-        idx.imported_files = []
         idx.imported_by = []
         
     for p, idx in virtual_index.items():
-        imports_text = " ".join(idx.imports)
-        for cand_path, cand_mod in path_to_mod.items():
-            if cand_path == p: continue
-            if cand_mod in imports_text or cand_mod.split(".")[-1] in imports_text:
-                idx.imported_files.append(cand_path)
-                virtual_index[cand_path].imported_by.append(p)
+        for imp_file in idx.imported_files:
+            if imp_file in virtual_index:
+                if p not in virtual_index[imp_file].imported_by:
+                    virtual_index[imp_file].imported_by.append(p)
                 
     # 3. Build summary for generated and affected
     summary = {}
@@ -3570,10 +3917,16 @@ def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_des
     
     # 2000 reserved for the wrapper prompt text below
     available_chunk_tokens = budget.remaining - 2000
-    if available_chunk_tokens < 1000:
-        available_chunk_tokens = 1000
+    if available_chunk_tokens <= 0:
+        return CodeReviewResult(approved=False, findings=[ReviewFinding(filepath="unknown", message="Sin presupuesto para revision.")])
 
-    payloads = PromptContextBuilder.build_for_reviewer(generated_files, max_tokens=available_chunk_tokens)
+    try:
+        payloads = PromptContextBuilder.build_for_reviewer(generated_files, max_tokens=available_chunk_tokens)
+    except PreflightError as e:
+        return CodeReviewResult(approved=False, findings=[ReviewFinding(filepath="unknown", message=str(e))])
+    except Exception as e:
+        return CodeReviewResult(approved=False, findings=[ReviewFinding(filepath="unknown", message=f"Fallo al construir chunks: {e}")])
+        
     for i, payload in enumerate(payloads):
         prompt = base_prompt + f"""
         **Codigo Generado para Revision (Lote {i+1} de {len(payloads)}):**
@@ -3602,9 +3955,7 @@ def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_des
             temperature=0.0,
         )
         try:
-            final_tokens = len(prompt) // 4
-            if final_tokens > (budget.max_input_tokens - budget.reserved_output_tokens):
-                raise PreflightError("El prompt excede el límite máximo.")
+            ensure_prompt_fits(prompt, budget, "Reviewer Chunk")
             response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
             cleaned_json = extract_code(response.text, "json")
             result = CodeReviewResult.model_validate_json(cleaned_json)
@@ -3616,12 +3967,20 @@ def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_des
             logging.error(f"Error parseando resultado de code_reviewer: {e}")
             all_findings.append(ReviewFinding(filepath="unknown", message=f"Error en la revision: {e}"))
 
-    # Revision de coherencia transversal: solo si hay mas de 1 lote y los parciales pasaron
-    if len(payloads) > 1 and not all_findings and not design_conflict:
+    # Revision de coherencia transversal
+    if generated_files and not all_findings and not design_conflict:
         logging.info("Realizando revision de coherencia transversal del sistema...")
 
+        coherence_budget = PromptBudget(max_input_tokens=100000, reserved_output_tokens=4000)
         coherence_graph = build_coherence_summary(generated_files, repo_context)
         coherence_graph_json = json.dumps(coherence_graph, indent=2)
+        
+        try:
+            add_required_or_fail(coherence_budget, contract_json, "Contrato en Coherence")
+            add_required_or_fail(coherence_budget, coherence_graph_json, "Grafo en Coherence")
+        except PreflightError as e:
+            all_findings.append(ReviewFinding(filepath="unknown", message=f"Fallo de presupuesto transversal: {e}"))
+            return CodeReviewResult(approved=False, findings=all_findings, design_conflict=design_conflict)
 
         coherence_prompt = f"""
         Eres un arquitecto de software revisando la coherencia global de un sistema.
@@ -3641,6 +4000,8 @@ def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_des
         NO revises el contenido completo de los archivos individuales (ya fue revisado por lotes).
         Responde en JSON bajo el esquema CodeReviewResult.
         """
+        
+        ensure_prompt_fits(coherence_prompt, coherence_budget, "Coherence Pass")
         try:
             coherence_config = types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -3922,13 +4283,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             raise ContractGenerationError(" | ".join(relevant_context_errors))
 
         # Cargar el contenido de los relevant_context_files solicitados por contrato respetando ContextBudget
-        _base_tokens = (
-            sum(len(c) // 4 for c in repo_context.relevant_source_files.values())
-            + sum(len(c) // 4 for c in repo_context.relevant_test_files.values())
-            + len(repo_context.repository_map) // 4
-            + len(repo_context.architecture_document) // 4
-            + len(desc) // 4
-        )
+        _base_tokens = estimate_repository_context_tokens(repo_context, desc, canonical_contract)
         _remaining_budget = max(0, context_budget.maximum_input_tokens - context_budget.reserved_output_tokens - _base_tokens)
         
         for f in canonical_contract.relevant_context_files:
@@ -3973,13 +4328,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             return found
 
         # Compute tokens already consumed by the base context payloads
-        initial_tokens = (
-            sum(len(c) // 4 for c in repo_context.relevant_source_files.values())
-            + sum(len(c) // 4 for c in repo_context.relevant_test_files.values())
-            + len(repo_context.repository_map) // 4
-            + len(repo_context.architecture_document) // 4
-            + len(desc) // 4
-        )
+        initial_tokens = estimate_repository_context_tokens(repo_context, desc, canonical_contract)
         # Reuse the context_budget created for build_repository_context
         max_tokens = context_budget.maximum_input_tokens
         reserved = context_budget.reserved_output_tokens
@@ -4196,17 +4545,31 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                 attempt += 1
                 continue
 
-            # GATE: MyPy
             if gate_plan.run_mypy:
-                files_for_mypy = build_mypy_scope(generated_files, repo_context)
-                mypy_passed, mypy_log = run_mypy(files_for_mypy, repo_context.quality_policy)
-                current_attempt_gates.append(GateResult(attempt=attempt, name="mypy", executed=True, passed=mypy_passed, output=mypy_log))
-                if not mypy_passed:
-                    logging.warning(f"MyPy encontró errores:\n{mypy_log}")
-                    feedback_dict = parse_compiler_output(mypy_log)
-                    all_attempt_results.append(current_attempt_gates)
-                    attempt += 1
-                    continue
+                if repo_context.structured_config.mypy_targets:
+                    mypy_passed, mypy_log = run_mypy([], repo_context.quality_policy)
+                    current_attempt_gates.append(GateResult(attempt=attempt, name="mypy", executed=True, passed=mypy_passed, output=mypy_log))
+                    if not mypy_passed:
+                        logging.warning(f"MyPy encontró errores:\n{mypy_log}")
+                        feedback_dict = parse_compiler_output(mypy_log)
+                        all_attempt_results.append(current_attempt_gates)
+                        attempt += 1
+                        continue
+                else:
+                    files_for_mypy = build_mypy_scope(generated_files, repo_context)
+                    
+                    if not files_for_mypy:
+                        current_attempt_gates.append(GateResult(attempt=attempt, name="mypy", executed=False, passed=True, output="Sin archivos válidos para MyPy."))
+                    else:
+                        mypy_passed, mypy_log = run_mypy(files_for_mypy, repo_context.quality_policy)
+                        current_attempt_gates.append(GateResult(attempt=attempt, name="mypy", executed=True, passed=mypy_passed, output=mypy_log))
+                        if not mypy_passed:
+                            logging.warning(f"MyPy encontró errores:\n{mypy_log}")
+                            feedback_dict = parse_compiler_output(mypy_log)
+                            all_attempt_results.append(current_attempt_gates)
+                            attempt += 1
+                            continue
+
             else:
                 current_attempt_gates.append(GateResult(attempt=attempt, name="mypy", executed=False, passed=True, output="MyPy deshabilitado por el plan de gates."))
 
@@ -4257,7 +4620,9 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                         logging.warning(f"Ruff --fix introdujo regresiones en '{p}'")
                         err_msg = ""
                         if c_errors: err_msg += "\nErrores de contrato:\n" + "\n".join(c_errors)
-                        if not q_valid: err_msg += "\nErrores de calidad estricta:\n" + "\n".join(q_errors)
+                        if not q_valid:
+                            errors_str = q_errors if isinstance(q_errors, str) else "\n".join(q_errors)
+                            err_msg += "\nErrores de calidad estricta:\n" + errors_str
                         
                         feedback_dict[p] = err_msg
                         contract_failed = True
