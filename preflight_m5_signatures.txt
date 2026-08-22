@@ -1,0 +1,17 @@
+__init__: def __init__(self, root_path='.', cache_dir=None)
+generate_repository_map: def generate_repository_map(self) -> str
+_extract_signatures: def _extract_signatures(self, filepath: str) -> dict[str, str]
+get_file_content: def get_file_content(self, relative_filepath) -> str
+read_architecture_document: def read_architecture_document(self) -> str
+_scan_config_files: def _scan_config_files(self) -> tuple[dict[str, str], dict[str, str]]
+_extract_project_configuration: def _extract_project_configuration(self, project_configs: dict[str, str], dep_files: dict[str, str]) -> 'PythonProjectConfiguration'
+_analyze_python_file: def _analyze_python_file(self, filepath: str, project_config: 'PythonProjectConfiguration | None'=None) -> 'PythonFileSummary | None'
+_detect_architecture_conflicts: def _detect_architecture_conflicts(self, context: 'RepositoryContext')
+_derive_quality_policy: def _derive_quality_policy(self, context: 'RepositoryContext', issue_description: str)
+_detect_testing_conventions: def _detect_testing_conventions(self, context: 'RepositoryContext')
+_load_cache: def _load_cache(self) -> 'RepositoryIndexCache'
+_save_cache: def _save_cache(self, cache: 'RepositoryIndexCache')
+_summarize_architecture_document: def _summarize_architecture_document(self, full_content: str, budget_tokens: int) -> str
+build_repository_context: def build_repository_context(self, issue_description: str, budget: 'ContextBudget') -> 'RepositoryContext'
+_link_dependencies: def _link_dependencies(self, context: 'RepositoryContext')
+select_relevant_files: def select_relevant_files(self, context: 'RepositoryContext', issue_description: str, token_budget: int, max_files: int, dependency_depth: int) -> None

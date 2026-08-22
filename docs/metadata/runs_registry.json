@@ -1,20 +1,7 @@
 {
-    "RUN-20260723-123945": {
-        "issue_id": 2,
-        "title": "ESTRUCTURA DE ARCHIVOS A GENERAR:\n/\n├── src/\n│   └── data/\n│       ├── cement_dictionary.py\n│       └── besoccer_client.py\n├── tests/\n│   └── data/\n│       ├── test_cement_dictionary.py\n│       └── test_besoccer_client.py\n└── vulture_whitelist.py\n\nRAZONAMIENTO TÉCNICO:\n1. Topología y Encapsulamiento: Se implementa el patrón de 'Diccionario de Cemento' en `cement_dictionary.py` para centralizar la normalización de nombres de equipos, exportando estrictamente mediante `__all__`. El cliente `BeSoccerClient` se aísla en su propio módulo, garantizando la separación de responsabilidades.\n2. Fail-Fast Estricto: La extracción de datos invoca la normalización en tiempo real. Cualquier anomalía (tipo de dato incorrecto o equipo no mapeado) levanta excepciones `TypeError` o `KeyError` inmediatamente, abortando la operación para evitar la propagación de datos corruptos.\n3. Resolución de Vulture: Se abandona la creación de clases mock en `vulture_whitelist.py` que generaban falsos positivos. En su lugar, se importa la clase real y se referencia el método directamente (`_ = BeSoccerClient.fetch_matches`), lo cual es el estándar oficial para marcar un atributo como utilizado ante el AST de Vulture.\n4. Testing Desacoplado: Se utiliza exclusivamente `unittest.mock.patch` para aislar las llamadas HTTP y el logger, cumpliendo con la restricción de no usar `pytest-mock`.",
-        "timestamp": "2026-07-23 12:39:46",
+    "run1": {
+        "issue_id": 1,
+        "title": "Refactor",
+        "timestamp": "2026-08-22 13:42:34",
         "status": "SUCCESS",
-        "commit_hash": "8d46dd897727f0995068d3cb761e895a0140d429",
-        "impact": {
-            "created": [],
-            "modified": [
-                "src/data/cement_dictionary.py",
-                "src/data/besoccer_client.py",
-                "vulture_whitelist.py",
-                "tests/data/test_cement_dictionary.py",
-                "tests/data/test_besoccer_client.py"
-            ],
-            "deleted": []
-        }
-    }
-}
+        "commit_hash": 

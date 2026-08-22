@@ -1,0 +1,140 @@
+from orchestrator_core.schemas import RepositoryContext
+from orchestrator_core.prompt_budget import PromptBudget, PromptPayload, PreflightError
+from orchestrator_core.project_config import is_test_file
+
+class PromptContextBuilder:
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        return len(text) // 4
+
+    @staticmethod
+    def build_for_coder(action: dict, design: dict, generated_so_far: dict[str, str], repo_context: RepositoryContext, context_manager: "RepositoryContextManager", budget: PromptBudget) -> PromptPayload:
+        filepath = action['filepath']
+        content = ""
+        omitted = []
+        
+        def try_add(frag: str, path_ref: str):
+            nonlocal content
+            tok = PromptContextBuilder._estimate_tokens(frag)
+            if budget.can_add(tok):
+                content += frag
+                budget.add(tok)
+            else:
+                omitted.append(path_ref)
+
+        for dep in design.get("dependencies", []):
+            code_text = context_manager.get_file_content(dep)
+            try_add(f"\n\n# Dependencia ('{dep}'):\n{code_text}", dep)
+            
+        for p, code_text in generated_so_far.items():
+            if p != filepath:
+                try_add(f"\n\n# Previamente generado ('{p}'):\n{code_text}", p)
+                
+        summary = repo_context.source_index.get(filepath) or repo_context.test_index.get(filepath)
+        if summary:
+            for dep in summary.imported_files:
+                if dep not in generated_so_far and dep not in design.get("dependencies", []):
+                    code_text = context_manager.get_file_content(dep)
+                    try_add(f"\n\n# Contexto importado ('{dep}'):\n{code_text}", dep)
+                    
+        return PromptPayload(content=content, estimated_tokens=budget.used_tokens, omitted_files=omitted)
+
+    @staticmethod
+    def build_for_tests(action: dict, generated_so_far: dict[str, str], repo_context: RepositoryContext, context_manager: "RepositoryContextManager", budget: PromptBudget) -> PromptPayload:
+        filepath = action['filepath']
+        content = ""
+        omitted = []
+        
+        def try_add(frag: str, path_ref: str):
+            nonlocal content
+            tok = PromptContextBuilder._estimate_tokens(frag)
+            if budget.can_add(tok):
+                content += frag
+                budget.add(tok)
+            else:
+                omitted.append(path_ref)
+
+        prod_files = [p for p in generated_so_far if not is_test_file(p, project_config=repo_context.structured_config)]
+        for p in prod_files:
+            try_add(f"\n\n# Archivo de Producción ('{p}'):\n{generated_so_far[p]}", p)
+            
+        summary = repo_context.test_index.get(filepath)
+        if summary:
+            for source_path in summary.tests_for:
+                if source_path not in prod_files:
+                    code_text = context_manager.get_file_content(source_path)
+                    try_add(f"\n\n# Objetivo de Test ('{source_path}'):\n{code_text}", source_path)
+                    
+        return PromptPayload(content=content, estimated_tokens=budget.used_tokens, omitted_files=omitted)
+
+    @staticmethod
+    def build_for_reviewer(generated_files: dict[str, str], max_tokens: int = 100000) -> list[PromptPayload]:
+        payloads = []
+        content = ""
+        current_tokens = 0
+        for path, code_text in generated_files.items():
+            frag = f"\n\n### Archivo: `{path}`\n```python\n{code_text}\n```\n"
+            tok = PromptContextBuilder._estimate_tokens(frag)
+            
+            if tok > max_tokens:
+                raise PreflightError(f"El archivo '{path}' excede el tamaño máximo de un lote ({max_tokens} tokens).")
+                
+            if current_tokens + tok > max_tokens and content:
+                payloads.append(PromptPayload(content=content, estimated_tokens=current_tokens))
+                content = ""
+                current_tokens = 0
+            content += frag
+            current_tokens += tok
+        if content:
+            payloads.append(PromptPayload(content=content, estimated_tokens=current_tokens))
+        return payloads
+
+    @staticmethod
+    def build_for_audit(generated_files: dict[str, str], max_tokens: int = 100000) -> list[PromptPayload]:
+        payloads = []
+        content = ""
+        current_tokens = 0
+        for path, code_text in generated_files.items():
+            frag = f"\n\nArchivo: '{path}'\n```python\n{code_text}\n```\n"
+            tok = PromptContextBuilder._estimate_tokens(frag)
+            
+            if tok > max_tokens:
+                raise PreflightError(f"El archivo '{path}' excede el tamaño máximo de un lote ({max_tokens} tokens).")
+                
+            if current_tokens + tok > max_tokens and content:
+                payloads.append(PromptPayload(content=content, estimated_tokens=current_tokens))
+                content = ""
+                current_tokens = 0
+            content += frag
+            current_tokens += tok
+        if content:
+            payloads.append(PromptPayload(content=content, estimated_tokens=current_tokens))
+        return payloads
+        
+    @staticmethod
+    def build_for_report(generated_files: dict[str, str], budget: PromptBudget) -> PromptPayload:
+        content = ""
+        omitted = []
+        for path, code_text in generated_files.items():
+            frag = f"\n\n### Archivo: `{path}`\n```python\n{code_text}\n```\n"
+            tok = PromptContextBuilder._estimate_tokens(frag)
+            if budget.can_add(tok):
+                content += frag
+                budget.add(tok)
+            else:
+                omitted.append(path)
+        return PromptPayload(content=content, estimated_tokens=budget.used_tokens, omitted_files=omitted)
+        
+    @staticmethod
+    def build_for_docs(design: dict, generated_files: dict[str, str], budget: PromptBudget) -> PromptPayload:
+        content = ""
+        omitted = []
+        for path, code_text in generated_files.items():
+            frag = f"\n\n### Modificación: `{path}`\n```python\n{code_text}\n```\n"
+            tok = PromptContextBuilder._estimate_tokens(frag)
+            if budget.can_add(tok):
+                content += frag
+                budget.add(tok)
+            else:
+                omitted.append(path)
+        return PromptPayload(content=content, estimated_tokens=budget.used_tokens, omitted_files=omitted)

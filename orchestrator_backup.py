@@ -7,13 +7,7 @@ Incluye un Agente Clínico Post-Mortem y Reflexión Multinivel Integral para aut
 """
 
 # 1. PARCHE DE SEGURIDAD SSL INICIAL
-import truststore
-
-try:
-    truststore.inject_into_ssl()
-except AttributeError:
-    import urllib3
-    truststore.inject_into_urllib3()
+# (Se movió a build_runtime_clients para no afectar la importación estática)
 
 import ast
 import configparser
@@ -100,6 +94,13 @@ def build_runtime_clients() -> RuntimeClients:
     Llamar esta función es el único mecanismo que activa efectos laterales de red.
     ``import orchestrator`` debe ser siempre seguro y no requerir credenciales.
     """
+    import truststore
+    try:
+        truststore.inject_into_ssl()
+    except AttributeError:
+        import urllib3
+        truststore.inject_into_urllib3()
+        
     load_dotenv()
 
     # Parche SSL opcional (solo si BYPASS_SSL_VERIFY=true)
@@ -900,7 +901,6 @@ class RepositoryContextManager:
                 break
 
 # Instancia global de contexto
-context_manager = RepositoryContextManager()
 # =====================================================================
 # ESQUEMAS PYDANTIC PARA REFACTORIZACION Y DISENO DINAMICO LIBRE
 # =====================================================================
@@ -1532,16 +1532,27 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
     
     budget_contract = PromptBudget(max_input_tokens=100000, reserved_output_tokens=8000)
 
-    # Priority 1: architecture doc (truncated if needed)
+    project_config_json = repository_context.structured_config.model_dump_json(indent=2)
+    policy_summary = json.dumps(repository_context.quality_policy.model_dump(), indent=2)
+
+    # Reservar contexto obligatorio
+    base_instructions_len = 2000 # estimación conservadora
+    mandatory_tokens = base_instructions_len + (len(title) + len(description) + len(project_config_json) + len(policy_summary)) // 4
+    if not budget_contract.can_add(mandatory_tokens):
+        raise PreflightError("El contexto obligatorio excede el presupuesto del Contrato.")
+    budget_contract.add(mandatory_tokens)
+
+    # Priority 1: architecture doc
     arch_text = repository_context.architecture_document or "[No se encontro documento de arquitectura.]"
     arch_tokens = len(arch_text) // 4
-    if arch_tokens > 8000:
-        arch_text = arch_text[:8000 * 4]
-        logging.warning("architecture_document truncado a 8000 tokens para el contrato.")
+    if not budget_contract.can_add(arch_tokens):
+        max_chars = budget_contract.remaining * 4
+        arch_text = arch_text[:max_chars]
+        logging.warning("architecture_document truncado.")
         arch_tokens = len(arch_text) // 4
     budget_contract.add(arch_tokens)
 
-    # Priority 2: compact global index (classes + functions only)
+    # Priority 2: compact global index
     all_summaries = {**repository_context.source_index, **repository_context.test_index}
     global_index_summary = {
         fp: {"classes": summary.classes, "functions": summary.functions}
@@ -1552,13 +1563,11 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
     if budget_contract.can_add(idx_tokens):
         budget_contract.add(idx_tokens)
     else:
-        # Truncate index to fit
         max_chars = budget_contract.remaining * 4
         global_index_json = global_index_json[:max_chars]
-        logging.warning("global_index_json truncado por presupuesto de tokens.")
         budget_contract.add(len(global_index_json) // 4)
 
-    # Priority 3: relevant file metadata (no full content)
+    # Priority 3: relevant file metadata
     relevant_files_metadata = {}
     for fp in list(repository_context.relevant_source_files.keys()) + list(repository_context.relevant_test_files.keys()):
         summary = all_summaries.get(fp)
@@ -1566,30 +1575,23 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
             relevant_files_metadata[fp] = summary.model_dump(exclude={'file_hash', 'estimated_tokens', 'referenced_symbols', 'docstring_summary'})
     relevant_metadata_json = json.dumps(relevant_files_metadata, indent=2)
     meta_tokens = len(relevant_metadata_json) // 4
-    if not budget_contract.can_add(meta_tokens):
-        relevant_metadata_json = relevant_metadata_json[:budget_contract.remaining * 4]
-        logging.warning("relevant_metadata_json truncado por presupuesto.")
-        budget_contract.add(len(relevant_metadata_json) // 4)
-    else:
+    if budget_contract.can_add(meta_tokens):
         budget_contract.add(meta_tokens)
-
-    project_config_json = repository_context.structured_config.model_dump_json(indent=2)
-    policy_summary = json.dumps(repository_context.quality_policy.model_dump(), indent=2)
+    else:
+        relevant_metadata_json = relevant_metadata_json[:budget_contract.remaining * 4]
+        budget_contract.add(len(relevant_metadata_json) // 4)
 
     # Priority 4: full file contents (only what fits)
     relevant_files_context = ""
     if repository_context.relevant_source_files or repository_context.relevant_test_files:
         relevant_files_context += "\n\nCONTENIDO DE ARCHIVOS RELEVANTES (PRE-SELECCIONADOS POR RELEVANCIA):\n"
-        for path, content in {**repository_context.relevant_source_files, **repository_context.relevant_test_files}.items():
-            frag = f"--- INICIO {path} ---\n{content}\n--- FIN {path} ---\n"
+        for path, file_content in {**repository_context.relevant_source_files, **repository_context.relevant_test_files}.items():
+            frag = f"--- INICIO {path} ---\n{file_content}\n--- FIN {path} ---\n"
             tok = len(frag) // 4
             if budget_contract.can_add(tok):
                 relevant_files_context += frag
                 budget_contract.add(tok)
-            else:
-                relevant_files_context += f"[{path}: omitido por presupuesto de tokens]\n"
-                logging.warning(f"Contrato: archivo '{path}' omitido por presupuesto.")
-    
+
     prompt = f"""
     Actúas como un Quality Assurance Lead y Arquitecto de Pruebas. Tu tarea es leer una especificación de requisitos de un Issue y traducirla a un contrato de aceptación técnico y estricto en formato JSON.
 
@@ -1669,6 +1671,9 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
     )
     
     try:
+        final_tokens = len(prompt) // 4
+        if final_tokens > (budget_contract.max_input_tokens - budget_contract.reserved_output_tokens):
+            raise PreflightError("El prompt final del contrato excede el presupuesto máximo.")
         response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
         contract = AcceptanceContract.model_validate_json(response.text)
         logging.info("Contrato de Aceptación generado con éxito.")
@@ -2536,7 +2541,7 @@ def fetch_issue(issue_id: int, repo) -> tuple[str, str]:
     issue = repo.get_issue(number=issue_id)
     return issue.title, issue.body
 
-def agent_analyze_and_design(title: str, description: str, contract: AcceptanceContract, repo_context: RepositoryContext, runtime: RuntimeClients, design_feedback: str = "") -> dict:
+def agent_analyze_and_design(title: str, description: str, contract: AcceptanceContract, repo_context: RepositoryContext, runtime: RuntimeClients, context_manager: "RepositoryContextManager", design_feedback: str = "") -> dict:
     """Diseña la solucion tecnica usando un PromptBudget con prioridades fail-closed/warn-and-truncate."""
     MAX_INPUT = 130000
     RESERVED_OUTPUT = 8192
@@ -2762,7 +2767,7 @@ class PromptContextBuilder:
             else:
                 omitted.append(path_ref)
 
-        prod_files = [p for p in generated_so_far if not is_test_file(p)]
+        prod_files = [p for p in generated_so_far if not is_test_file(p, project_config=repo_context.structured_config)]
         for p in prod_files:
             try_add(f"\n\n# Archivo de Producción ('{p}'):\n{generated_so_far[p]}", p)
             
@@ -2840,7 +2845,7 @@ class PromptContextBuilder:
         return PromptPayload(content=content, estimated_tokens=budget.used_tokens, omitted_files=omitted)
 
 
-def agent_implement_code(action: dict, file_contract: FileContract, design: dict, generated_so_far: dict[str, str], repo_context: RepositoryContext, runtime: RuntimeClients, feedback: str = "") -> str:
+def agent_implement_code(action: dict, file_contract: FileContract, design: dict, generated_so_far: dict[str, str], repo_context: RepositoryContext, runtime: RuntimeClients, context_manager: "RepositoryContextManager", feedback: str = "") -> str:
     logging.info(f"Procesando '{action['filepath']}' | Operacion: {action['operation']} con {MODEL_LIGHT}...")
     budget = PromptBudget(max_input_tokens=128000, reserved_output_tokens=8192)
     payload = PromptContextBuilder.build_for_coder(action, design, generated_so_far, repo_context, context_manager, budget)
@@ -2878,7 +2883,16 @@ def agent_implement_code(action: dict, file_contract: FileContract, design: dict
         "yml": "yaml",
     }
     ext = action['filepath'].split('.')[-1]
-    return extract_code(response.text, LANGUAGE_BY_EXTENSION.get(ext))
+    
+    response = runtime.ai_client.models.generate_content(
+        model=MODEL_LIGHT,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.0,
+        ),
+    )
+    
+    return extract_code(response.text or "", LANGUAGE_BY_EXTENSION.get(ext))
 
 def resolve_mocking_instruction(framework: Literal["pytest", "unittest"], file_contract: FileContract, repo_context: RepositoryContext) -> str:
     forbidden = {
@@ -2918,7 +2932,7 @@ def resolve_mocking_instruction(framework: Literal["pytest", "unittest"], file_c
         "mocker ni monkeypatch."
     )
 
-def agent_generate_tests(action: dict, file_contract: FileContract, generated_so_far: dict[str, str], issue_desc: str, repo_context: RepositoryContext, framework: Literal["pytest", "unittest"], runtime: RuntimeClients, feedback: str = "") -> str:
+def agent_generate_tests(action: dict, file_contract: FileContract, generated_so_far: dict[str, str], issue_desc: str, repo_context: RepositoryContext, framework: Literal["pytest", "unittest"], runtime: RuntimeClients, context_manager: "RepositoryContextManager", feedback: str = "") -> str:
     logging.info(f"Disenando suite de pruebas unitarias para '{action['filepath']}'...")
 
     budget = PromptBudget(max_input_tokens=128000, reserved_output_tokens=8192)
@@ -3091,7 +3105,10 @@ def agent_security_audit(
             temperature=0.0
         )
         try:
-            response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
+            final_tokens = len(prompt) // 4
+        if final_tokens > (budget_contract.max_input_tokens - budget_contract.reserved_output_tokens):
+            raise PreflightError("El prompt final del contrato excede el presupuesto máximo.")
+        response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
             cleaned_json = extract_code(response.text, "json")
             result = SecurityAuditResult.model_validate_json(cleaned_json)
             if not result.approved:
@@ -3461,6 +3478,9 @@ def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_des
             response_schema=CodeReviewResult,
             temperature=0.0,
         )
+        final_tokens = len(prompt) // 4
+        if final_tokens > (budget_contract.max_input_tokens - budget_contract.reserved_output_tokens):
+            raise PreflightError("El prompt final del contrato excede el presupuesto máximo.")
         response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
         try:
             cleaned_json = extract_code(response.text, "json")
@@ -3683,6 +3703,7 @@ def handle_pipeline_failure(
         raise pipeline_exc
 
 def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeClients) -> None:
+    context_manager = RepositoryContextManager()
     pipeline_passed = False
     title, desc = "", ""
     design: dict = {}

@@ -152,10 +152,49 @@ def test_agent_implement_code_calls_generate():
     }
     
     repo_context = MagicMock()
-    # Need to patch orchestrator.context_manager for the test
-    orchestrator.context_manager = MagicMock()
+    mock_context_manager = MagicMock()
     
-    res = orchestrator.agent_implement_code(action, contract, {}, {}, repo_context, mock_runtime)
+    res = orchestrator.agent_implement_code(action, contract, {}, {}, repo_context, mock_runtime, mock_context_manager)
     
     assert res == 'print("test")'
+    mock_runtime.ai_client.models.generate_content.assert_called_once()
+
+
+def test_calls_receive_context_manager_and_feedback():
+    import orchestrator
+    mock_runtime = MagicMock()
+    mock_response = MagicMock(text='{"test": "test"}')
+    mock_runtime.ai_client.models.generate_content.return_value = mock_response
+    mock_context_manager = MagicMock(spec=orchestrator.RepositoryContextManager)
+    
+    contract = orchestrator.FileContract(filepath='test.py', purpose='t', required_exports=set(), forbidden_imports=set())
+    repo_context = MagicMock()
+    
+    # Should not raise TypeError and receive correct kwargs
+    res1 = orchestrator.agent_analyze_and_design("T", "D", MagicMock(), repo_context, mock_runtime, context_manager=mock_context_manager, design_feedback="test feedback")
+    res2 = orchestrator.agent_implement_code({'filepath': 'test.py', 'operation': 'MODIFY', 'signatures': {}, 'instructions': ''}, contract, {}, {}, repo_context, mock_runtime, context_manager=mock_context_manager, feedback="test feedback2")
+    res3 = orchestrator.agent_generate_tests({'filepath': 'test.py', 'operation': 'MODIFY', 'signatures': {}, 'instructions': ''}, contract, {}, "D", repo_context, "pytest", mock_runtime, context_manager=mock_context_manager, feedback="test feedback3")
+    
+    # If it didn't throw TypeError, signature is correct
+    assert True
+
+
+def test_agent_security_audit_no_name_error():
+    import orchestrator
+    mock_runtime = MagicMock()
+    mock_response = MagicMock(text='{"approved": true, "findings": []}')
+    mock_runtime.ai_client.models.generate_content.return_value = mock_response
+    
+    contract = orchestrator.AcceptanceContract(required_modified_files={'test.py'})
+    repo_context = MagicMock()
+    repo_context.dependency_files = {'requirements.txt': 'pytest==7.0.0\nrequests'}
+    repo_context.structured_config.dependencies = []
+    repo_context.structured_config.dev_dependencies = []
+    repo_context.structured_config.model_dump_json.return_value = "{}"
+    repo_context.quality_policy.model_dump_json.return_value = "{}"
+    
+    # Run it
+    res = orchestrator.agent_security_audit({}, {"test.py": "print(1)"}, contract, mock_runtime, repo_context)
+    
+    assert res.approved == True
     mock_runtime.ai_client.models.generate_content.assert_called_once()
