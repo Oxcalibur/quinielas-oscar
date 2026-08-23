@@ -51,3 +51,4 @@ target_content.txt
 *_backup.py
 *_corrupto.py
 fix_test.py
+pyright_errors.txt
