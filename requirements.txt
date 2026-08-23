@@ -1,4 +1,10 @@
-```text
-pandas
+python-dotenv
+PyGithub
+google-genai
+pydantic
+truststore
+requests
 pytest
-```
+ruff
+vulture
+mypy
