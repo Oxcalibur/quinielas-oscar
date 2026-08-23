@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 with patch('os.getenv', return_value=None):
     import orchestrator
 
-@patch('orchestrator.load_dotenv')
+@patch('orchestrator_core.runtime.load_dotenv')
 def test_import_no_credentials(mock_load):
     with patch.dict(os.environ, clear=True):
         with pytest.raises(orchestrator.PreflightError):
@@ -112,8 +112,10 @@ def test_prompt_budget_reserve_fixed():
     budget.add(500)
     assert budget.remaining == 400
 
+@patch('builtins.open')
+@patch('os.makedirs')
 @patch('orchestrator.RuntimeClients')
-def test_arch_doc_updater_signature(mock_runtime):
+def test_arch_doc_updater_signature(mock_runtime, mock_makedirs, mock_open):
     mock_runtime.ai_client.models.generate_content.return_value = MagicMock(text='test')
     try:
         orchestrator.agent_update_architecture_doc(
@@ -198,3 +200,4 @@ def test_agent_security_audit_no_name_error():
     
     assert res.approved == True
     mock_runtime.ai_client.models.generate_content.assert_called_once()
+

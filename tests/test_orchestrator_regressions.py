@@ -70,11 +70,27 @@ def test_R001_mypy_native_files(mock_runtime, tmp_path):
          orig_updater = orchestrator.agent_update_architecture_doc
          orchestrator.agent_update_architecture_doc = MagicMock()
          
+         orig_reporter = orchestrator.agent_generate_execution_report
+         orchestrator.agent_generate_execution_report = MagicMock()
+         
+         orig_manual = orchestrator.agent_update_user_manual
+         orchestrator.agent_update_user_manual = MagicMock()
+         
+         orig_deploy = orchestrator.deploy_to_github
+         orchestrator.deploy_to_github = MagicMock()
+         
+         orig_meta = orchestrator.write_transactional_metadata
+         orchestrator.write_transactional_metadata = MagicMock()
+         
          try:
              orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
          finally:
              orchestrator.agent_code_reviewer = orig_reviewer
              orchestrator.agent_update_architecture_doc = orig_updater
+             orchestrator.agent_generate_execution_report = orig_reporter
+             orchestrator.agent_update_user_manual = orig_manual
+             orchestrator.deploy_to_github = orig_deploy
+             orchestrator.write_transactional_metadata = orig_meta
              
          mock_run_mypy.assert_called_with([], repo_context.quality_policy)
          mock_build_scope.assert_not_called()
@@ -121,11 +137,27 @@ def test_R002_mypy_inferred_scope(mock_runtime, tmp_path):
          orig_updater = orchestrator.agent_update_architecture_doc
          orchestrator.agent_update_architecture_doc = MagicMock()
          
+         orig_reporter = orchestrator.agent_generate_execution_report
+         orchestrator.agent_generate_execution_report = MagicMock()
+         
+         orig_manual = orchestrator.agent_update_user_manual
+         orchestrator.agent_update_user_manual = MagicMock()
+         
+         orig_deploy = orchestrator.deploy_to_github
+         orchestrator.deploy_to_github = MagicMock()
+         
+         orig_meta = orchestrator.write_transactional_metadata
+         orchestrator.write_transactional_metadata = MagicMock()
+         
          try:
              orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
          finally:
              orchestrator.agent_code_reviewer = orig_reviewer
              orchestrator.agent_update_architecture_doc = orig_updater
+             orchestrator.agent_generate_execution_report = orig_reporter
+             orchestrator.agent_update_user_manual = orig_manual
+             orchestrator.deploy_to_github = orig_deploy
+             orchestrator.write_transactional_metadata = orig_meta
              
          mock_build_scope.assert_called_once()
          mock_run_mypy.assert_called_with(["a.py"], repo_context.quality_policy)
@@ -133,9 +165,9 @@ def test_R002_mypy_inferred_scope(mock_runtime, tmp_path):
 # =====================================================================
 # R003: MyPy normalization
 # =====================================================================
-def test_R003_mypy_normalization():
+def test_R003_mypy_normalization(tmp_path):
     config_content = "[mypy]\nfiles =  src , , src/**/*.py, src, src/**/*.py\n"
-    manager = orchestrator.RepositoryContextManager(".", "logs")
+    manager = orchestrator.RepositoryContextManager(".", str(tmp_path / "logs"))
     config = manager._extract_project_configuration({"mypy.ini": config_content}, {})
     assert config.mypy_targets == ["src", "src/**/*.py"], "Debe eliminar vacíos, espacios, deduplicar preservando orden, y mantener globs"
 
@@ -148,7 +180,7 @@ def test_R004a_cache_is_test_reclassification(tmp_path):
     test_file = tmp_path / "test_a.py"
     test_file.write_text("def test_a(): pass", encoding="utf-8")
     
-    manager = orchestrator.RepositoryContextManager(str(tmp_path), "logs")
+    manager = orchestrator.RepositoryContextManager(str(tmp_path), str(tmp_path / "logs"))
     
     # Run 1: pytest config says test_a.py is a test
     budget = orchestrator.ContextBudget(max_tokens=10000)
@@ -175,7 +207,7 @@ def test_R004b_cache_is_test_reclassification_failure(tmp_path):
     
     test_file = tmp_path / "test_a.py"
     test_file.write_text("def test_a(): pass", encoding="utf-8")
-    manager = orchestrator.RepositoryContextManager(str(tmp_path), "logs")
+    manager = orchestrator.RepositoryContextManager(str(tmp_path), str(tmp_path / "logs"))
     budget = orchestrator.ContextBudget(max_tokens=10000)
     
     with patch.object(manager, "_extract_project_configuration") as mock_ext:
@@ -481,4 +513,8 @@ def test_R018_import_safety():
             elif isinstance(node.value.func, ast.Attribute):
                 func_name = node.value.func.attr
             assert func_name not in ["Client", "Github", "load_dotenv", "build_runtime_clients", "inject_into_ssl"], f"Llamada global prohibida: {func_name}"
+
+
+
+
 
