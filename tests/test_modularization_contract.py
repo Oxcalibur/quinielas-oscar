@@ -22,6 +22,7 @@ import orchestrator_core.response_parsing
 import orchestrator_core.testing_policy
 import orchestrator_core.exceptions
 import orchestrator_core.planning_agents
+import orchestrator_core.failure_analysis_agents
 import textwrap
 
 def test_MOD001_public_apis_still_available():
@@ -72,6 +73,7 @@ def test_MOD001_public_apis_still_available():
         
         # M9
         "agent_generate_acceptance_contract", "agent_analyze_and_design",
+        "agent_analyze_pipeline_failure",
         
         "validate_contract_consistency", "_create_file_contract",
         "_check_forbidden_constructs", "_check_exports", "_check_tests",
@@ -263,6 +265,7 @@ def test_MOD005_core_import_safe():
     assert orchestrator_core.testing_policy is not None
     assert orchestrator_core.exceptions is not None
     assert orchestrator_core.planning_agents is not None
+    assert orchestrator_core.failure_analysis_agents is not None
 
 def test_MOD006_identity_reexports():
     """Comprueba la identidad de los objetos públicos ya movidos."""
@@ -373,6 +376,9 @@ def test_MOD006_identity_reexports():
     assert orchestrator.agent_update_architecture_doc is orchestrator_core.documentation_agents.agent_update_architecture_doc
     assert orchestrator.agent_update_user_manual is orchestrator_core.documentation_agents.agent_update_user_manual
     assert orchestrator.agent_generate_execution_report is orchestrator_core.documentation_agents.agent_generate_execution_report
+
+    # failure_analysis_agents
+    assert orchestrator.agent_analyze_pipeline_failure is orchestrator_core.failure_analysis_agents.agent_analyze_pipeline_failure
 
 def test_MOD007_no_duplicate_authoritative_implementations():
     """Comprueba que los símbolos ya movidos no mantengan una segunda implementación autoritativa en orchestrator.py."""

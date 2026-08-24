@@ -8,6 +8,7 @@ The system is an autonomous SDLC Orchestrator utilizing a GenAI model (google-ge
 - **Implementation Agents (orchestrator_core/implementation_agents.py):** PRESENT. Owns gent_implement_code and gent_generate_tests.
 - **Review Agents (orchestrator_core/review_agents.py):** PRESENT. Owns agent_code_reviewer, agent_security_audit, build_coherence_summary, summarize_dependency_file.
 - **Documentation Agents (orchestrator_core/documentation_agents.py):** PRESENT. Owns agent_update_architecture_doc, agent_update_user_manual, agent_generate_execution_report.
+- **Failure Analysis Agents (orchestrator_core/failure_analysis_agents.py):** PRESENT. Owns agent_analyze_pipeline_failure.
 - **Core Orchestrator (orchestrator_core/):**
   - model_config.py: Ownership of model definitions (e.g., MODEL_LIGHT, MODEL_HEAVY).
   - 
