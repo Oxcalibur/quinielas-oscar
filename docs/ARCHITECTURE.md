@@ -4,15 +4,19 @@
 The system is an autonomous SDLC Orchestrator utilizing a GenAI model (google-genai) and GitHub integration.
 
 ## 2. Component Topology
-- **Entrypoint:** orchestrator.py acts as the primary facade. It contains the orchestrator logic including gent_implement_code and gent_generate_tests. (Note: M10 future module implementation_agents.py is ABSENT).
+- **Entrypoint:** orchestrator.py acts as the primary facade (re-exporting compatibility names).
+- **Implementation Agents (orchestrator_core/implementation_agents.py):** PRESENT. Owns gent_implement_code and gent_generate_tests.
 - **Core Orchestrator (orchestrator_core/):**
   - model_config.py: Ownership of model definitions (e.g., MODEL_LIGHT, MODEL_HEAVY).
-  - untime.py: Runtime client ownership (RuntimeClients, uild_runtime_clients).
+  - 
+untime.py: Runtime client ownership (RuntimeClients, uild_runtime_clients).
   - planning_agents.py: Planning agent ownership (gent_generate_acceptance_contract, gent_analyze_and_design).
-  - esponse_parsing.py: Response parsing ownership.
+  - 
+esponse_parsing.py: Response parsing ownership.
   - 	esting_policy.py: Testing policy ownership.
   - contract_validation.py: Contract validation.
-  - epository_context.py: Repository intelligence/context caching.
+  - 
+epository_context.py: Repository intelligence/context caching.
   - prompt_budget.py, context_budget.py, prompt_context.py: Prompt budgeting and context generation.
   - quality_gates.py: Quality gates implementation (ruff, mypy, vulture, pytest).
   - schemas.py: Schema ownership (using Pydantic).
