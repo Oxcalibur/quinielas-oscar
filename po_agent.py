@@ -494,16 +494,16 @@ def propose_backlog(args):
     7. ESQUEMA AGENT-READY MÍNIMO OBLIGATORIO: Todo Issue DEBE tener obligatoriamente `title`, `purpose`, `scope`, `expected_behavior`, `acceptance_criteria`, `source_requirements`, `depends_on`, y `priority`.
     8. DEPENDENCIAS EXPLÍCITAS Y ESTABLES: En `depends_on`, NUNCA uses comodines ("ALL", "TODOS"). Cita el título explícito del Issue exacto.
     9. AUDITORÍA HOSTIL: Tu auto-auditoría DEBE evaluar los issues finales comprobando:
-       - REQUIREMENT_SEMANTICS_PRESERVED
-       - ENUMERATED_REQUIREMENT_COMPLETE
+       - REQUIREMENT_SEMANTICS_PRESERVED (must FAIL if an explicitly enumerated mandatory milestone was omitted or generalized)
+       - ENUMERATED_REQUIREMENT_COMPLETE (must FAIL if an authoritative explicit list has been shortened, summarized or replaced with "etc.")
        - SOURCE_REQUIREMENT_MATCH
        - SOURCE_PRECEDENCE_RESPECTED
        - PERSISTENCE_SEMANTICS_COMPLETE
        - NO_RECOMMENDATION_ESCALATION
-       - NO_PRODUCT_ASSUMPTION
+       - NO_PRODUCT_ASSUMPTION (must FAIL if an acceptance/failure condition was converted into an unprovided workflow transition)
        - AGENT_READY_SCHEMA_COMPLETE
        - DEPENDENCY_REFERENCES_RESOLVE
-       - DEPENDENCY_COMPLETENESS
+       - DEPENDENCY_COMPLETENESS (must FAIL if Issue text consumes a capability whose provider is missing from depends_on)
        Emite hallazgos estructurados (check, verdict, evidence, affected_issue) y finaliza la lista. NADA de 'Chain of Thought' abierto.
     10. RECONCILIACIÓN DE DOMINIO: Usa nombres de componentes del vocabulario existente si aplican.
 
@@ -517,14 +517,16 @@ def propose_backlog(args):
     
     CRITICAL GENERATION RULES PARA ESTRICTA ADHESIÓN:
     1. NO RECOMMENDATION ESCALATION: Si la fuente sugiere o recomienda tecnología, NUNCA la conviertas en obligatoria o en Acceptance Criteria vinculante. Debes listar estas recomendaciones en 'implementation_open_choices' y 'estimated_files'. Toda restricción obligatoria debe ser tecnológicamente neutral (a menos que la fuente indique lo contrario).
-    2. DEPENDENCY COMPLETENESS: Si un Issue requiere/consume una capacidad, DEBE depender directamente del Issue que la provee. No crees secuencias artificiales, crea topología real por consumo.
+    2. DEPENDENCY CONSUMPTION AUDIT: For each proposed Issue, inspect purpose, scope, expected_behavior, and acceptance_criteria. Identify capabilities the Issue directly invokes, consumes, reads from, writes through, mutates through, or requires to execute. If one of those capabilities is delivered by another proposed Issue, that provider Issue MUST appear in depends_on. The audit must compare the text of the consumer Issue against its depends_on field. DEPENDENCY_COMPLETENESS MUST NOT be PASS if Issue text says it consumes capability X AND another proposed Issue provides X AND the provider is absent from depends_on. Do not create dependencies merely because another Issue executes earlier. Dependencies represent capability consumption, not arbitrary sequence. No wildcard dependencies. No artificial "everything above" chains.
     3. COMPOSITE PERSISTENT STATE UPDATE SEMANTICS: Si un requisito autoritativo define un estado compuesto persistente y enumera dimensiones obligatorias, todas las dimensiones enumeradas deben representarse como estado observable mantenible/actualizable donde la fuente requiera mutación.
     4. DETAILED PRODUCT DIMENSIONS: Si un requisito enumera explícitamente granularidad o jerarquía de salida, preserva cada nivel especificado en los criterios de aceptación.
     5. COMPREHENSIVE CONFIGURATION: Si un requisito enumera dimensiones de configuración intercambiables, cada dimensión enumerada debe permanecer configurable y observable. Si el comportamiento/configuración debe ser externo e independiente del código fuente, los Issues de componentes generados deben consumir explícitamente esa capacidad de configuración externa.
-    6. PRODUCT AMBIGUITIES MUST BE PRESERVED: Si un flujo de trabajo autoritativo define una regla de aceptación compuesta pero no especifica una transición para una rama fallida, preserva esa rama como unresolved_product_decisions. Nunca inventes la transición faltante.
+    6. ACCEPTANCE CONDITION DOES NOT IMPLY FAILURE TRANSITION: A source rule describing when an output/state/result is valid, accepted, successful, complete, or approved defines an acceptance condition. It does NOT automatically define what the workflow must do when that condition is not satisfied. Never infer, unless an authoritative source explicitly defines it: failure -> retry, failure -> previous component, failure -> next component, failure -> abort, failure -> HITL, failure -> regenerate. If the source explicitly defines the success condition but does NOT unambiguously define the failure transition: 1. preserve the success condition exactly; 2. do not invent the missing transition; 3. record the missing transition in unresolved_product_decisions. A statement that a component 'participates in a cycle' or is subject to a retry limit does not necessarily define the exact routing transition for every possible failure-state combination. Preserve unresolved routing semantics when the exact transition is not explicit.
     7. EXTERNAL INTEGRATION: Si un requisito de integración exige explícitamente múltiples operaciones como crear/escribir/actualizar/leer, preserva cada operación requerida en lugar de debilitarla a un subconjunto.
     8. PHYSICAL MODULARITY: Si la fuente exige separación física de módulos/archivos para un tipo de componente, preserva ese requisito de modularidad física.
     9. ALLOWED SET SELECTION: Si la fuente obliga a usar un conjunto de opciones (ej. YAML o JSON), el conjunto es obligatorio (constraints), pero la selección específica dentro de él es abierta (implementation_open_choices).
+    10. ENUMERATED SOURCE FIDELITY: When an authoritative source explicitly enumerates mandatory dimensions, EVERY enumerated dimension must remain explicit in the relevant Issue. Do not replace explicit mandatory enumerations with "etc.", "among others", "such as" when used as a replacement for the complete mandatory list, generic category summaries, or representative subsets. If the source requires A, B, C, D, the resulting relevant Issue must explicitly preserve A, B, C, D. This applies to all mandatory source enumerations, including output dimensions, configuration dimensions, quality dimensions, state dimensions, integration operations, checkpoints, and agent responsibilities.
+    11. EXPLICIT MILESTONE COMPLETENESS: When an authoritative requirement explicitly enumerates multiple mandatory human gates, approvals, checkpoints, milestones, or confirmation points, every one must appear explicitly as an observable Acceptance Criterion in the relevant Issue(s). Do not collapse (e.g., Gate A + Gate B into "supports HITL" or another generic abstraction). All explicitly enumerated mandatory milestones must remain individually observable.
     """
     
     config = types.GenerateContentConfig(

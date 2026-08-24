@@ -424,3 +424,35 @@ class TestPOAgentBehavioral:
         
         for literal in forbidden_literals:
             assert literal not in source, f"Production prompt contains domain-specific literal: {literal}"
+
+    def test_t1_enumeration_fidelity(self):
+        """T1: Assert prompt forbids losing mandatory enumerated dimensions and replacing with etc."""
+        import inspect
+        source = inspect.getsource(po_agent.propose_backlog)
+        assert "ENUMERATED SOURCE FIDELITY" in source
+        assert "EVERY enumerated dimension must remain explicit" in source
+        assert "etc." in source
+        assert "shortened, summarized or replaced with" in source
+
+    def test_t2_dependency_consumption(self):
+        """T2: Assert prompt requires comparing Issue capability consumption against depends_on."""
+        import inspect
+        source = inspect.getsource(po_agent.propose_backlog)
+        assert "DEPENDENCY CONSUMPTION AUDIT" in source
+        assert "consumes capability X AND another proposed Issue provides X AND the provider is absent from depends_on" in source
+
+    def test_t3_acceptance_vs_transition(self):
+        """T3: Assert prompt explicitly states that an acceptance condition does not itself define a failure workflow transition."""
+        import inspect
+        source = inspect.getsource(po_agent.propose_backlog)
+        assert "ACCEPTANCE CONDITION DOES NOT IMPLY FAILURE TRANSITION" in source
+        assert "does NOT automatically define what the workflow must do when that condition is not satisfied" in source
+        assert "record the missing transition in unresolved_product_decisions" in source
+
+    def test_t4_milestone_completeness(self):
+        """T4: Assert prompt requires every explicitly enumerated mandatory human gate/checkpoint to remain individually observable."""
+        import inspect
+        source = inspect.getsource(po_agent.propose_backlog)
+        assert "EXPLICIT MILESTONE COMPLETENESS" in source
+        assert "mandatory human gates, approvals, checkpoints, milestones, or confirmation points" in source
+        assert "remain individually observable" in source
