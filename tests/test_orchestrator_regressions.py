@@ -323,6 +323,26 @@ def test_R009_coder_promptbudget(mock_runtime):
     assert "small existing code" in call_args
     assert "a.py" in call_args
 
+def test_R009b_coder_promptbudget_huge_mandatory_preflight(mock_runtime):
+    action = {"filepath": "a.py", "operation": "MODIFY", "signatures": "", "instructions": "test"}
+    file_contract = MagicMock()
+    file_contract.model_dump_json.return_value = '{"huge": "' + "z" * 500000 + '"}'
+    repo_context = MagicMock()
+    repo_context.quality_policy = MagicMock()
+    manager = MagicMock()
+    manager.get_file_content.return_value = "small code"
+    
+    design = {"context": "small context"}
+    feedback = "small feedback"
+    
+    mock_runtime.ai_client.models.generate_content.return_value.text = "Mock Report"
+    
+    with pytest.raises(orchestrator.PreflightError):
+        orchestrator.agent_implement_code(action, file_contract, design, {}, repo_context, mock_runtime, manager, feedback)
+        
+    assert mock_runtime.ai_client.models.generate_content.call_count == 0
+
+
 def test_R010_test_generator_promptbudget(mock_runtime):
     action = {"filepath": "a.py", "operation": "CREATE", "signatures": "", "instructions": "test"}
     file_contract = orchestrator.FileContract(
