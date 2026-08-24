@@ -368,6 +368,8 @@ def test_MOD006_identity_reexports():
     # planning_agents
     assert orchestrator.agent_generate_acceptance_contract is orchestrator_core.planning_agents.agent_generate_acceptance_contract
     assert orchestrator.agent_analyze_and_design is orchestrator_core.planning_agents.agent_analyze_and_design
+    assert orchestrator.agent_code_reviewer is orchestrator_core.review_agents.agent_code_reviewer
+    assert orchestrator.agent_security_audit is orchestrator_core.review_agents.agent_security_audit
 
 def test_MOD007_no_duplicate_authoritative_implementations():
     """Comprueba que los símbolos ya movidos no mantengan una segunda implementación autoritativa en orchestrator.py."""
