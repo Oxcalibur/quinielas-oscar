@@ -24,6 +24,7 @@ import orchestrator_core.exceptions
 import orchestrator_core.planning_agents
 import orchestrator_core.failure_analysis_agents
 import orchestrator_core.logging_metadata
+import orchestrator_core.github_operations
 import textwrap
 
 def test_MOD001_public_apis_still_available():
@@ -35,7 +36,11 @@ def test_MOD001_public_apis_still_available():
         "agent_analyze_pipeline_failure",
         
         # M14
-        "write_local_log", "write_transactional_metadata", "agent_code_reviewer", "agent_security_audit", "run_pipeline",
+        "write_local_log", "write_transactional_metadata",
+    "fetch_issue", "deploy_to_github", "ensure_git_setup",
+        
+        # M15
+        "fetch_issue", "deploy_to_github", "ensure_git_setup", "agent_code_reviewer", "agent_security_audit", "run_pipeline",
         
         # M0
         "PromptBudget", "PromptPayload", "PreflightError", "ensure_prompt_fits",
@@ -78,10 +83,18 @@ def test_MOD001_public_apis_still_available():
         # M9
         "agent_generate_acceptance_contract", "agent_analyze_and_design",
     "write_local_log", "write_transactional_metadata",
+    "fetch_issue", "deploy_to_github", "ensure_git_setup",
+        
+        # M15
+        "fetch_issue", "deploy_to_github", "ensure_git_setup",
         "agent_analyze_pipeline_failure",
         
         # M14
         "write_local_log", "write_transactional_metadata",
+    "fetch_issue", "deploy_to_github", "ensure_git_setup",
+        
+        # M15
+        "fetch_issue", "deploy_to_github", "ensure_git_setup",
         
         "validate_contract_consistency", "_create_file_contract",
         "_check_forbidden_constructs", "_check_exports", "_check_tests",
@@ -275,6 +288,7 @@ def test_MOD005_core_import_safe():
     assert orchestrator_core.planning_agents is not None
     assert orchestrator_core.failure_analysis_agents is not None
     assert orchestrator_core.logging_metadata is not None
+    assert orchestrator_core.github_operations is not None
 
 def test_MOD006_identity_reexports():
     """Comprueba la identidad de los objetos públicos ya movidos."""
@@ -393,6 +407,11 @@ def test_MOD006_identity_reexports():
     assert orchestrator.write_local_log is orchestrator_core.logging_metadata.write_local_log
     assert orchestrator.write_transactional_metadata is orchestrator_core.logging_metadata.write_transactional_metadata
 
+    # github_operations
+    assert orchestrator.fetch_issue is orchestrator_core.github_operations.fetch_issue
+    assert orchestrator.deploy_to_github is orchestrator_core.github_operations.deploy_to_github
+    assert orchestrator.ensure_git_setup is orchestrator_core.github_operations.ensure_git_setup
+
 def test_MOD007_no_duplicate_authoritative_implementations():
     """Comprueba que los símbolos ya movidos no mantengan una segunda implementación autoritativa en orchestrator.py."""
     root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -436,7 +455,8 @@ def test_MOD007_no_duplicate_authoritative_implementations():
         "_derive_gate_plan", "validate_testing_policy_compatibility", "run_local_tests",
         "base_preflight", "tool_preflight",
         "agent_generate_acceptance_contract", "agent_analyze_and_design",
-    "write_local_log", "write_transactional_metadata"
+    "write_local_log", "write_transactional_metadata",
+    "fetch_issue", "deploy_to_github", "ensure_git_setup"
     ]
     
     for node in tree.body:
