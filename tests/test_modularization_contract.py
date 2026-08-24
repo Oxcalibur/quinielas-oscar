@@ -23,6 +23,7 @@ import orchestrator_core.testing_policy
 import orchestrator_core.exceptions
 import orchestrator_core.planning_agents
 import orchestrator_core.failure_analysis_agents
+import orchestrator_core.logging_metadata
 import textwrap
 
 def test_MOD001_public_apis_still_available():
@@ -31,7 +32,10 @@ def test_MOD001_public_apis_still_available():
         # Historical
         "run_mypy", "run_static_analysis", "agent_implement_code", "agent_generate_tests",
         "agent_generate_execution_report", "agent_update_architecture_doc", "agent_update_user_manual",
-        "agent_analyze_pipeline_failure", "agent_code_reviewer", "agent_security_audit", "run_pipeline",
+        "agent_analyze_pipeline_failure",
+        
+        # M14
+        "write_local_log", "write_transactional_metadata", "agent_code_reviewer", "agent_security_audit", "run_pipeline",
         
         # M0
         "PromptBudget", "PromptPayload", "PreflightError", "ensure_prompt_fits",
@@ -73,7 +77,11 @@ def test_MOD001_public_apis_still_available():
         
         # M9
         "agent_generate_acceptance_contract", "agent_analyze_and_design",
+    "write_local_log", "write_transactional_metadata",
         "agent_analyze_pipeline_failure",
+        
+        # M14
+        "write_local_log", "write_transactional_metadata",
         
         "validate_contract_consistency", "_create_file_contract",
         "_check_forbidden_constructs", "_check_exports", "_check_tests",
@@ -266,6 +274,7 @@ def test_MOD005_core_import_safe():
     assert orchestrator_core.exceptions is not None
     assert orchestrator_core.planning_agents is not None
     assert orchestrator_core.failure_analysis_agents is not None
+    assert orchestrator_core.logging_metadata is not None
 
 def test_MOD006_identity_reexports():
     """Comprueba la identidad de los objetos públicos ya movidos."""
@@ -380,6 +389,10 @@ def test_MOD006_identity_reexports():
     # failure_analysis_agents
     assert orchestrator.agent_analyze_pipeline_failure is orchestrator_core.failure_analysis_agents.agent_analyze_pipeline_failure
 
+    # logging_metadata
+    assert orchestrator.write_local_log is orchestrator_core.logging_metadata.write_local_log
+    assert orchestrator.write_transactional_metadata is orchestrator_core.logging_metadata.write_transactional_metadata
+
 def test_MOD007_no_duplicate_authoritative_implementations():
     """Comprueba que los símbolos ya movidos no mantengan una segunda implementación autoritativa en orchestrator.py."""
     root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -422,7 +435,8 @@ def test_MOD007_no_duplicate_authoritative_implementations():
         "parse_compiler_output", "build_mypy_scope", "run_mypy",
         "_derive_gate_plan", "validate_testing_policy_compatibility", "run_local_tests",
         "base_preflight", "tool_preflight",
-        "agent_generate_acceptance_contract", "agent_analyze_and_design"
+        "agent_generate_acceptance_contract", "agent_analyze_and_design",
+    "write_local_log", "write_transactional_metadata"
     ]
     
     for node in tree.body:
