@@ -370,6 +370,9 @@ def test_MOD006_identity_reexports():
     assert orchestrator.agent_analyze_and_design is orchestrator_core.planning_agents.agent_analyze_and_design
     assert orchestrator.agent_code_reviewer is orchestrator_core.review_agents.agent_code_reviewer
     assert orchestrator.agent_security_audit is orchestrator_core.review_agents.agent_security_audit
+    assert orchestrator.agent_update_architecture_doc is orchestrator_core.documentation_agents.agent_update_architecture_doc
+    assert orchestrator.agent_update_user_manual is orchestrator_core.documentation_agents.agent_update_user_manual
+    assert orchestrator.agent_generate_execution_report is orchestrator_core.documentation_agents.agent_generate_execution_report
 
 def test_MOD007_no_duplicate_authoritative_implementations():
     """Comprueba que los símbolos ya movidos no mantengan una segunda implementación autoritativa en orchestrator.py."""
