@@ -25,6 +25,7 @@ import orchestrator_core.planning_agents
 import orchestrator_core.failure_analysis_agents
 import orchestrator_core.logging_metadata
 import orchestrator_core.github_operations
+import orchestrator_core.implementation_agents
 import textwrap
 
 def test_MOD001_public_apis_still_available():
@@ -289,6 +290,7 @@ def test_MOD005_core_import_safe():
     assert orchestrator_core.failure_analysis_agents is not None
     assert orchestrator_core.logging_metadata is not None
     assert orchestrator_core.github_operations is not None
+    assert orchestrator_core.implementation_agents is not None
 
 def test_MOD006_identity_reexports():
     """Comprueba la identidad de los objetos públicos ya movidos."""
@@ -412,6 +414,10 @@ def test_MOD006_identity_reexports():
     assert orchestrator.deploy_to_github is orchestrator_core.github_operations.deploy_to_github
     assert orchestrator.ensure_git_setup is orchestrator_core.github_operations.ensure_git_setup
 
+    # implementation_agents
+    assert orchestrator.agent_implement_code is orchestrator_core.implementation_agents.agent_implement_code
+    assert orchestrator.agent_generate_tests is orchestrator_core.implementation_agents.agent_generate_tests
+
 def test_MOD007_no_duplicate_authoritative_implementations():
     """Comprueba que los símbolos ya movidos no mantengan una segunda implementación autoritativa en orchestrator.py."""
     root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -455,6 +461,7 @@ def test_MOD007_no_duplicate_authoritative_implementations():
         "_derive_gate_plan", "validate_testing_policy_compatibility", "run_local_tests",
         "base_preflight", "tool_preflight",
         "agent_generate_acceptance_contract", "agent_analyze_and_design",
+    "agent_implement_code", "agent_generate_tests",
     "write_local_log", "write_transactional_metadata",
     "fetch_issue", "deploy_to_github", "ensure_git_setup"
     ]
