@@ -1042,22 +1042,20 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
 
             # --- LOGICA DE DELEGACION AUTOMATIZADA AL PO AGENT ---
             if "[ACTION: DELEGATE_TO_PO]" in pm_report:
-                logging.warning("Problema funcional/estructural detectado. Delegando de forma autonoma al PO Agent...")
+                logging.warning("El post-mortem requiere validacion humana del PO. Ejecucion detenida.")
                 try:
-                    subprocess.run([sys.executable, "po_agent.py", "--refine-issue", str(issue_id), "--pm-report", pm_report], check=True, timeout=300)
-
-                    # Modificar etiquetas a validacion requerida
                     issue = runtime.repo.get_issue(number=issue_id)
-                    if "status:in-progress" in [l.name for l in issue.labels]: 
+                    if "status:in-progress" in [l.name for l in issue.labels]:
                         issue.remove_from_labels("status:in-progress")
-                    try: 
+                    try:
                         runtime.repo.get_label("po:human-validation-required")
-                    except: 
+                    except:
                         runtime.repo.create_label("po:human-validation-required", "fbca04")
                     issue.add_to_labels("po:human-validation-required")
-                    logging.info(f"El PO Agent ha renegociado el Issue #{issue_id}. A la espera de firma en GitHub.")
-                except Exception as e: 
-                    logging.error(f"Fallo al delegar al PO Agent: {e}")
+                    issue.create_comment("## Fallo SDLC Pipeline\nEl Agente Orquestador ha detectado problemas funcionales o estructurales en el Issue que requieren validación de Product Owner humano. Revisa el reporte Post-Mortem en los logs locales de la ejecución.")
+                except Exception as e:
+                    logging.error(f"Fallo al actualizar etiquetas para validacion humana: {e}")
+                return
             else:
                 try:
                     issue = runtime.repo.get_issue(number=issue_id)
