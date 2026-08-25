@@ -411,14 +411,14 @@ class TestDeriveGatePlan(unittest.TestCase):
         self.assertEqual(plan.test_framework, "pytest")
         self.assertTrue(plan.run_tests)
 
-    def test_25_repo_none_required_unittest_mock_patch_fails_closed(self):
-        # 10. repo_framework = None, required_testing_techniques = {"unittest.mock.patch"} -> fail closed
+    def test_25_repo_none_required_unittest_mock_patch_resolves_unittest_greenfield(self):
+        # 10. repo_framework = None, required_testing_techniques = {"unittest.mock.patch"} -> greenfield fallback to unittest
         self.repo_context_mock.detected_test_framework = None
         self.contract_mock.required_testing_techniques = ["unittest.mock.patch"]
         
-        with self.assertRaises(PreflightError) as context:
-            _derive_gate_plan(self.repo_context_mock, self.contract_mock)
-        self.assertIn("exige pruebas", str(context.exception))
+        plan = _derive_gate_plan(self.repo_context_mock, self.contract_mock)
+        self.assertEqual(plan.test_framework, "unittest")
+        self.assertTrue(plan.run_tests)
 
     def test_26_validate_testing_policy_compatibility(self):
         from orchestrator import validate_testing_policy_compatibility, AcceptanceContract

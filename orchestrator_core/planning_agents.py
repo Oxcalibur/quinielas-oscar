@@ -163,6 +163,12 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
 
     {relevant_files_context}
 
+    REGLAS DE FIDELIDAD DE FUENTES (SOURCE FIDELITY):
+    1. PRECEDENCIA VINCULANTE: "Scope", "Expected Behavior", "Acceptance Criteria", "Constraints", "Preservation Requirements", "authoritative repository evidence", y "Purpose when it contains normative requirements" son ESTRICTAMENTE VINCULANTES.
+    2. RECOMENDACIONES NO VINCULANTES: "Implementation Open Choices", "recommendations", "suggested technologies", "optional choices", "examples", y "estimated_files / Estimated Files" son fuentes NO VINCULANTES. Estas NO DEBEN convertirse en una regla contractual obligatoria a menos que estén respaldadas independientemente por una restricción vinculante. Explicitly: An estimated file list is a planning hint and MUST NOT automatically become required_final_files, required_new_files or required_modified_files without independent binding evidence from requirements or repository state.
+    3. EXHAUSTIVIDAD DE REQUISITOS ENUMERADOS: Si el Issue enumera dimensiones obligatorias, debes preservar TODAS. No omitas ninguna, no las reemplaces por conceptos adyacentes, no cambies su significado semántico y no inventes requisitos de negocio adicionales.
+    4. PRESERVACIÓN SEMÁNTICA: Preserva el significado exacto de la terminología de origen. Si la fuente exige una restauración o equivalencia exacta tras la persistencia, el contrato debe preservar esa exigencia semántica exacta en lugar de debilitarla a un simple "load" o "resume".
+
     Analiza TODAS las fuentes de información para derivar el contrato. Por ejemplo:
     - Si el Issue pide modificar un archivo, el contrato debe incluirlo en `required_modified_files`.
     - Si la `POLÍTICA DE CALIDAD` indica `require_explicit_exports: true`, el contrato debe generar reglas en `required_exports` para los archivos de producción relevantes.

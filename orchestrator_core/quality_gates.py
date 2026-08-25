@@ -268,11 +268,17 @@ def _derive_gate_plan(repo_context: RepositoryContext, contract: AcceptanceContr
         plan.run_tests = True
     elif tests_contracted:
         if plan.test_framework == "none":
-            raise PreflightError(
-                "El contrato exige pruebas pero no existe "
-                "un framework permitido para ejecutarlas."
-            )
-        plan.run_tests = True
+            # Greenfield fallback ONLY when tests are contracted and no framework can be resolved
+            if repo_framework is None and "unittest" not in forbidden_tools:
+                plan.test_framework = "unittest"
+                plan.run_tests = True
+            else:
+                raise PreflightError(
+                    "El contrato exige pruebas pero no existe "
+                    "un framework permitido para ejecutarlas."
+                )
+        else:
+            plan.run_tests = True
     elif plan.test_framework != "none":
         # Mantener regresión normal del repositorio
         plan.run_tests = True

@@ -837,3 +837,206 @@ def test_D3_acceptance_contract_uses_json_schema_transport():
         with pytest.raises(ContractGenerationError) as exc:
             _build_gemini_json_schema(bad_schema)
         assert "pattern" in str(exc.value)
+
+
+def test_D4_A_contract_source_fidelity_prompt():
+    from orchestrator_core.planning_agents import agent_generate_acceptance_contract
+    from orchestrator_core.schemas import AcceptanceContract
+    from unittest.mock import patch, MagicMock
+
+    mock_runtime = MagicMock()
+    mock_repo_context = MagicMock()
+    mock_repo_context.quality_policy.model_dump.return_value = {}
+    mock_repo_context.structured_config.testing_policy.framework = "pytest"
+    mock_repo_context.structured_config.dependencies = []
+    mock_repo_context.structured_config.dev_dependencies = []
+
+    with patch("orchestrator_core.planning_agents.ensure_prompt_fits"):
+        def mock_generate_content(*args, **kwargs):
+            mock_response = MagicMock()
+            mock_response.text = '{"required_final_files":[],"required_new_files":[],"required_modified_files":[],"required_deleted_files":[],"preserved_files":[],"relevant_context_files":[],"required_tests":{},"protected_tests":{},"preserved_signatures":{},"preserved_behaviors":[],"forbidden_test_names":[],"forbidden_constructs":{},"required_exports":{},"required_quality_tools":[],"forbidden_quality_tools":[],"required_testing_techniques":[],"forbidden_testing_techniques":[],"required_imports":{},"forbidden_imports":{},"required_calls":{},"required_patterns":{},"required_structures":{},"required_decorators":{}}'
+            return mock_response
+        mock_runtime.ai_client.models.generate_content.side_effect = mock_generate_content
+
+        agent_generate_acceptance_contract(
+            "Issue Title",
+            "Acceptance Criteria:\n- alpha\n- beta\n- gamma\nImplementation Open Choices:\n- LibraryX is recommended",
+            mock_repo_context,
+            mock_runtime
+        )
+
+        calls = mock_runtime.ai_client.models.generate_content.call_args_list
+        assert len(calls) > 0
+        prompt = calls[0][1].get("contents")
+
+        # Verify generic rules exist
+        assert "PRECEDENCIA VINCULANTE" in prompt
+        assert "RECOMENDACIONES NO VINCULANTES" in prompt
+        assert "EXHAUSTIVIDAD DE REQUISITOS ENUMERADOS" in prompt
+        assert "PRESERVACIÓN SEMÁNTICA" in prompt
+
+        # Verify it tells the LLM not to make optional things mandatory
+        assert "NO DEBEN convertirse en una regla contractual obligatoria" in prompt
+        assert "preservar TODAS" in prompt
+
+        # BookAI-specific strings should not be in the template
+        assert "chapter summaries" not in prompt
+        assert "LibraryX is recommended" in prompt # From the fake issue
+
+
+def test_D4_C1_greenfield_contracted_tests():
+    from orchestrator_core.quality_gates import _derive_gate_plan
+    from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(),
+        detected_test_framework=None
+    )
+
+    contract = AcceptanceContract(
+        required_tests={"test_file.py": ["test_something"]}
+    )
+
+    plan = _derive_gate_plan(repo_context, contract)
+
+    assert plan.run_tests is True
+    assert plan.test_framework == "unittest"
+
+
+def test_D4_C2_existing_pytest_preserved():
+    from orchestrator_core.quality_gates import _derive_gate_plan
+    from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(),
+        detected_test_framework="pytest"
+    )
+
+    contract = AcceptanceContract(
+        required_tests={"test_file.py": ["test_something"]}
+    )
+
+    plan = _derive_gate_plan(repo_context, contract)
+
+    assert plan.run_tests is True
+    assert plan.test_framework == "pytest"
+
+
+def test_D4_C3_existing_unittest_preserved():
+    from orchestrator_core.quality_gates import _derive_gate_plan
+    from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(),
+        detected_test_framework="unittest"
+    )
+
+    contract = AcceptanceContract(
+        required_tests={"test_file.py": ["test_something"]}
+    )
+
+    plan = _derive_gate_plan(repo_context, contract)
+
+    assert plan.run_tests is True
+    assert plan.test_framework == "unittest"
+
+
+def test_D4_C4_implied_pytest_preserved():
+    from orchestrator_core.quality_gates import _derive_gate_plan
+    from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(),
+        detected_test_framework=None
+    )
+
+    contract = AcceptanceContract(
+        required_tests={"test_file.py": ["test_something"]},
+        required_testing_techniques=["pytest-mock"]
+    )
+
+    plan = _derive_gate_plan(repo_context, contract)
+
+    assert plan.run_tests is True
+    assert plan.test_framework == "pytest"
+
+
+def test_D4_C5_forbidden_fallback_fail_closed():
+    from orchestrator_core.quality_gates import _derive_gate_plan
+    from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+    from orchestrator_core.prompt_budget import PreflightError
+    import pytest
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(),
+        detected_test_framework=None
+    )
+
+    contract = AcceptanceContract(
+        required_tests={"test_file.py": ["test_something"]},
+        forbidden_quality_tools=["unittest"]
+    )
+
+    with pytest.raises(PreflightError) as exc:
+        _derive_gate_plan(repo_context, contract)
+
+    assert "no existe un framework permitido" in str(exc.value)
+
+
+def test_D4_C6_no_tests():
+    from orchestrator_core.quality_gates import _derive_gate_plan
+    from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(),
+        detected_test_framework=None
+    )
+
+    contract = AcceptanceContract()
+
+    plan = _derive_gate_plan(repo_context, contract)
+
+    assert plan.run_tests is False
+    assert plan.test_framework == "none"
+
+def test_D4_B_no_bookai_hardcode_in_contract_generation():
+    import inspect
+    from orchestrator_core.planning_agents import agent_generate_acceptance_contract
+
+    source = inspect.getsource(agent_generate_acceptance_contract)
+    assert "Story Bible" not in source, "BookAI hardcode found: Story Bible"
+    assert "chapter summaries" not in source, "BookAI hardcode found: chapter summaries"
+    assert "executive summary" not in source, "BookAI hardcode found: executive summary"
+    assert "Pydantic" not in source, "BookAI hardcode found: Pydantic"
+
+def test_D4_C7_repository_framework_conflict_not_greenfield():
+    from orchestrator_core.quality_gates import _derive_gate_plan
+    from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+    from orchestrator_core.prompt_budget import PreflightError
+
+    # repo_context has no detected framework directly, but structured config implies pytest
+    structured_config = PythonProjectConfiguration()
+    structured_config.detected_quality_tools = ["pytest"]
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=structured_config,
+        detected_test_framework=None
+    )
+
+    contract = AcceptanceContract(
+        required_tests={"tests/test_x.py": ["test_x"]},
+        forbidden_quality_tools=["pytest"]
+    )
+
+    try:
+        _derive_gate_plan(repo_context, contract)
+        assert False, "Expected PreflightError to be raised due to framework conflict, but it silently fell back."
+    except PreflightError as e:
+        assert "no existe un framework permitido" in str(e)
