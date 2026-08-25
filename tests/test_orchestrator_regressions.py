@@ -729,3 +729,8 @@ def test_D2_failure_analysis_prompt_semantics(mock_runtime):
         assert "El pipeline falló tras agotar los reintentos de calidad" not in prompt
         assert "El pipeline ha fallado durante su ejecución. Determina la fase real del fallo" in prompt
         assert "No asumas que se agotaron reintentos" in prompt
+
+        # New assertions for Governance alignment
+        assert "Los defectos, inconsistencias, reglas no soportadas o fallos de síntesis del AcceptanceContract generado son fallos de contexto u orquestación del Orchestrator" in prompt
+        assert "La simple necesidad de regenerar o corregir el AcceptanceContract NO DEBE activar la delegación al PO" in prompt
+        assert "SOLO SI la evidencia demuestra que el Issue o los requisitos del producto contienen una ambigüedad material" in prompt

@@ -30,8 +30,9 @@ def agent_analyze_pipeline_failure(issue_id: int, title: str, description: str, 
     - PRODUCT/ISSUE AMBIGUITY: Si la implementación falló por ambigüedad funcional o diseño insalvable (después de haber generado código o diseño válido).
 
     🚨 INSTRUCCIÓN CRÍTICA DE DELEGACIÓN 🚨:
-    - Si el fallo es puramente técnico y puede corregirse sin modificar Issue, requisitos, AcceptanceContract, criterios de aceptación o decisiones estructurales: DEBE OMITIR `[ACTION: DELEGATE_TO_PO]`.
-    - Si superar el fallo requiere modificar, aclarar o refinar requisitos funcionales, Issue, AcceptanceContract, criterios de aceptación o decisiones estructurales: DEBE INCLUIR obligatoriamente la etiqueta exacta `[ACTION: DELEGATE_TO_PO]` en una línea independiente al final de tu reporte.
+    - DEBE INCLUIR obligatoriamente la etiqueta exacta `[ACTION: DELEGATE_TO_PO]` en una línea independiente al final de tu reporte SOLO SI la evidencia demuestra que el Issue o los requisitos del producto contienen una ambigüedad material, contradicción, falta de decisión de negocio o defecto de requisitos que requiere juicio humano del Product Owner.
+    - Los defectos, inconsistencias, reglas no soportadas o fallos de síntesis del AcceptanceContract generado son fallos de contexto u orquestación del Orchestrator y NO deben desencadenar la delegación al PO, a menos que la causa subyacente sea un defecto o decisión no resuelta demostrable en el propio Issue.
+    - La simple necesidad de regenerar o corregir el AcceptanceContract NO DEBE activar la delegación al PO. Fallos puramente técnicos también deben omitir esta etiqueta.
     """
 
     issue_ctx = f"Issue #{issue_id}: '{title}' | Spec: {description}"
