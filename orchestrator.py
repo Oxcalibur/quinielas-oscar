@@ -490,7 +490,7 @@ def handle_pipeline_failure(
         if flat_gates and design is not None and generated_files is not None and issue_description is not None:
             logging.info("Analizando el fallo del pipeline con el agente LLM...")
             try:
-                report = agent_analyze_pipeline_failure(issue_id, title, issue_description, design or {}, generated_files or {}, flat_gates, runtime)
+                report = agent_analyze_pipeline_failure(issue_id, title, issue_description, design or {}, generated_files or {}, flat_gates, runtime, error_msg=error_msg, pipeline_exc=pipeline_exc)
                 with open(os.path.join(run_log_dir, "post_mortem_report.md"), "w", encoding="utf-8") as f:
                     f.write(report)
                 issue.create_comment(f"## 🚨 SDLC Pipeline Post-Mortem\nEl Agente falló durante la ejecución: `{error_msg}`\n\n### Análisis Técnico:\n{report}\n\nRevisa los logs locales en `{run_log_dir}`.")
@@ -593,9 +593,9 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             canonical_contract = agent_generate_acceptance_contract(title, desc, repo_context, runtime)
             logging.info(f"Contrato Canónico generado: {canonical_contract.model_dump_json(indent=2)}")
             _record(GateResult(attempt=1, name="contract_generation", executed=True, passed=True, output="Contrato generado con éxito."))
-        except ContractGenerationError as e:
+        except Exception as e:
             logging.error(f"Fallo crítico al generar el contrato de aceptación: {e}")
-            _record(GateResult(attempt=1, name="contract_generation", executed=True, passed=False, output=str(e)))
+            _record(GateResult(attempt=1, name="contract_generation", executed=True, passed=False, output=f'{type(e).__name__}: {str(e)}'))
             raise
 
         consistent, consistency_errors = validate_contract_consistency(canonical_contract)

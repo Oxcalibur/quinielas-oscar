@@ -130,15 +130,15 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
     - `required_tests`: Pruebas obligatorias para la **nueva** funcionalidad.
     - `protected_tests`: Tests existentes que no deben romperse ni eliminarse. Extrae esto del índice del repositorio, especialmente los tests que cubren los módulos a modificar.
     - `forbidden_test_names`: Nombres de pruebas que están explícitamente prohibidos.
-    - `preserved_signatures`: Firmas de símbolos que deben preservarse porque otros módulos dependen de ellas. Extrae las firmas completas del índice. Formato: `{"module.py": {"PublicClass": "class PublicClass(arg1: int)", "public_function": "def public_function()"}}`.
+    - `preserved_signatures`: Firmas de símbolos que deben preservarse porque otros módulos dependen de ellas. Extrae las firmas completas del índice. Formato: `{{"module.py": {{"PublicClass": "class PublicClass(arg1: int)", "public_function": "def public_function()"}}}}`.
     - `preserved_behaviors`: Comportamientos de alto nivel que no pueden ser expresados con reglas AST o tests. **Usa este campo como último recurso.** Prioriza siempre convertir un comportamiento en una regla concreta en `protected_tests`, `required_tests`, `required_patterns`, etc. Si usas este campo, el Code Reviewer lo validará semánticamente.
     - `forbidden_constructs`: Un diccionario donde la clave es un glob de ruta de archivo (ej. `src/services/example_service*.py`) y el valor es una lista de constructos prohibidos ('continue', 'pass').
     - `required_exports`: Símbolos que deben estar en `__all__`.
-    - `required_calls`: Especifica que una función debe llamar a otra. Ej: `{"src/utils/data_normalization.py": {"normalize_data_item": [{"name": "dependency_function", "count": 1}]}}`.
-    - `required_patterns`: Patrones de código obligatorios. Ej: `{"src/services/example_service.py": ["log_before_raise"]}`.
-    - `required_structures`: Validaciones sobre estructuras de datos. Ej: `{"src/utils/data_normalization.py": {"PUBLIC_MAPPING": "has_aliases"}}`.
-    - `required_imports` / `forbidden_imports`: Reglas sobre importaciones. Ej: `{"tests/*": ["from unittest.mock import patch"]}` y `{"tests/*": ["pytest_mock"]}`.
-    - `required_decorators`: Decoradores requeridos en un archivo. Ej: `{"src/api/endpoints.py": ["@app.route"]}`.
+    - `required_calls`: Especifica que una función debe llamar a otra. Ej: `{{ "src/utils/data_normalization.py": {{ "normalize_data_item": [{{ "name": "dependency_function", "count": 1 }}] }} }}`.
+    - `required_patterns`: Patrones de código obligatorios. Ej: `{{ "src/services/example_service.py": ["log_before_raise"] }}`.
+    - `required_structures`: Validaciones sobre estructuras de datos. Ej: `{{ "src/utils/data_normalization.py": {{ "PUBLIC_MAPPING": "has_aliases" }} }}`.
+    - `required_imports` / `forbidden_imports`: Reglas sobre importaciones. Ej: `{{ "tests/*": ["from unittest.mock import patch"] }}` y `{{ "tests/*": ["pytest_mock"] }}`.
+    - `required_decorators`: Decoradores requeridos en un archivo. Ej: `{{ "src/api/endpoints.py": ["@app.route"] }}`.
     - `required_quality_tools`: Herramientas de calidad (linters/checkers) que deben usarse (ej. "mypy", "ruff").
     - `forbidden_quality_tools`: Herramientas de calidad prohibidas (ej. "flake8").
     - `required_testing_techniques`: Técnicas específicas de pruebas obligatorias (ej. "unittest.mock.patch").

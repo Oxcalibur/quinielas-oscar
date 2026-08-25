@@ -34,7 +34,7 @@ def test_R001_mypy_native_files(mock_runtime, tmp_path):
     repo_context.structured_config.dependencies = []
     repo_context.structured_config.dev_dependencies = []
     repo_context.quality_policy = MagicMock()
-    
+
     child_issue = MagicMock()
     ready_label = MagicMock()
     ready_label.name = "ai:ready-to-code"
@@ -77,34 +77,34 @@ def test_R001_mypy_native_files(mock_runtime, tmp_path):
          patch("subprocess.run"), \
          patch("orchestrator.run_mypy", return_value=(True, "OK")) as mock_run_mypy, \
          patch("orchestrator.build_mypy_scope") as mock_build_scope:
-         
+
          manager_instance = MockRCM.return_value
          manager_instance.build_repository_context.return_value = repo_context
-         
+
          # Mock for report generation
          mock_runtime.ai_client.models.generate_content.return_value.text = "Mock Report"
-         
+
          orig_reviewer = orchestrator.agent_code_reviewer
          orchestrator.agent_code_reviewer = MagicMock()
          orchestrator.agent_code_reviewer.return_value.approved = True
          orchestrator.agent_code_reviewer.return_value.design_conflict = False
          orchestrator.agent_code_reviewer.return_value.model_dump.return_value = {}
-         
+
          orig_updater = orchestrator.agent_update_architecture_doc
          orchestrator.agent_update_architecture_doc = MagicMock()
-         
+
          orig_reporter = orchestrator.agent_generate_execution_report
          orchestrator.agent_generate_execution_report = MagicMock()
-         
+
          orig_manual = orchestrator.agent_update_user_manual
          orchestrator.agent_update_user_manual = MagicMock()
-         
+
          orig_deploy = orchestrator.deploy_to_github
          orchestrator.deploy_to_github = MagicMock()
-         
+
          orig_meta = orchestrator.write_transactional_metadata
          orchestrator.write_transactional_metadata = MagicMock()
-         
+
          try:
              orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
          finally:
@@ -114,7 +114,7 @@ def test_R001_mypy_native_files(mock_runtime, tmp_path):
              orchestrator.agent_update_user_manual = orig_manual
              orchestrator.deploy_to_github = orig_deploy
              orchestrator.write_transactional_metadata = orig_meta
-             
+
          mock_run_mypy.assert_called_with([], repo_context.quality_policy)
          mock_build_scope.assert_not_called()
 
@@ -125,7 +125,7 @@ def test_R002_mypy_inferred_scope(mock_runtime, tmp_path):
     repo_context.structured_config.dependencies = []
     repo_context.structured_config.dev_dependencies = []
     repo_context.quality_policy = MagicMock()
-    
+
     child_issue = MagicMock()
     ready_label = MagicMock()
     ready_label.name = "ai:ready-to-code"
@@ -168,33 +168,33 @@ def test_R002_mypy_inferred_scope(mock_runtime, tmp_path):
          patch("subprocess.run"), \
          patch("orchestrator.run_mypy", return_value=(True, "OK")) as mock_run_mypy, \
          patch("orchestrator.build_mypy_scope", return_value=["a.py"]) as mock_build_scope:
-         
+
          manager_instance = MockRCM.return_value
          manager_instance.build_repository_context.return_value = repo_context
-         
+
          mock_runtime.ai_client.models.generate_content.return_value.text = "Mock Report"
-         
+
          orig_reviewer = orchestrator.agent_code_reviewer
          orchestrator.agent_code_reviewer = MagicMock()
          orchestrator.agent_code_reviewer.return_value.approved = True
          orchestrator.agent_code_reviewer.return_value.design_conflict = False
          orchestrator.agent_code_reviewer.return_value.model_dump.return_value = {}
-         
+
          orig_updater = orchestrator.agent_update_architecture_doc
          orchestrator.agent_update_architecture_doc = MagicMock()
-         
+
          orig_reporter = orchestrator.agent_generate_execution_report
          orchestrator.agent_generate_execution_report = MagicMock()
-         
+
          orig_manual = orchestrator.agent_update_user_manual
          orchestrator.agent_update_user_manual = MagicMock()
-         
+
          orig_deploy = orchestrator.deploy_to_github
          orchestrator.deploy_to_github = MagicMock()
-         
+
          orig_meta = orchestrator.write_transactional_metadata
          orchestrator.write_transactional_metadata = MagicMock()
-         
+
          try:
              orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
          finally:
@@ -204,7 +204,7 @@ def test_R002_mypy_inferred_scope(mock_runtime, tmp_path):
              orchestrator.agent_update_user_manual = orig_manual
              orchestrator.deploy_to_github = orig_deploy
              orchestrator.write_transactional_metadata = orig_meta
-             
+
          mock_build_scope.assert_called_once()
          mock_run_mypy.assert_called_with(["a.py"], repo_context.quality_policy)
 
@@ -222,15 +222,15 @@ def test_R003_mypy_normalization(tmp_path):
 # =====================================================================
 def test_R004a_cache_is_test_reclassification(tmp_path):
     import tempfile
-    
+
     test_file = tmp_path / "test_a.py"
     test_file.write_text("def test_a(): pass", encoding="utf-8")
-    
+
     manager = orchestrator.RepositoryContextManager(str(tmp_path), str(tmp_path / "logs"))
-    
+
     # Run 1: pytest config says test_a.py is a test
     budget = orchestrator.ContextBudget(max_tokens=10000)
-    
+
     with patch.object(manager, "_extract_project_configuration") as mock_ext:
         config1 = orchestrator.PythonProjectConfiguration()
         config1.pytest_patterns = ["test_*.py"]
@@ -238,7 +238,7 @@ def test_R004a_cache_is_test_reclassification(tmp_path):
         ctx1 = manager.build_repository_context("issue", budget)
         assert "test_a.py" in ctx1.test_index
         assert "test_a.py" not in ctx1.source_index
-        
+
     # Run 2: same hash, but pytest config changed
     with patch.object(manager, "_extract_project_configuration") as mock_ext:
         config2 = orchestrator.PythonProjectConfiguration()
@@ -250,22 +250,22 @@ def test_R004a_cache_is_test_reclassification(tmp_path):
 
 def test_R004b_cache_is_test_reclassification_failure(tmp_path):
     import tempfile
-    
+
     test_file = tmp_path / "test_a.py"
     test_file.write_text("def test_a(): pass", encoding="utf-8")
     manager = orchestrator.RepositoryContextManager(str(tmp_path), str(tmp_path / "logs"))
     budget = orchestrator.ContextBudget(max_tokens=10000)
-    
+
     with patch.object(manager, "_extract_project_configuration") as mock_ext:
         config1 = orchestrator.PythonProjectConfiguration()
         config1.pytest_patterns = ["test_*.py"]
         mock_ext.return_value = config1
         manager.build_repository_context("issue", budget)
-        
+
     with patch.object(manager, "_extract_project_configuration") as mock_ext:
         config2 = orchestrator.PythonProjectConfiguration()
         config2.pytest_patterns = ["spec_*.py"]
-        mock_ext.return_value = config2 
+        mock_ext.return_value = config2
         # Force failure during re-reading/analyzing
         with patch("orchestrator_core.repository_context.is_test_file", side_effect=Exception("Read error")) as mock_is_test:
             ctx2 = manager.build_repository_context("issue", budget)
@@ -290,12 +290,12 @@ from ..package import symbol
 """
     tree = ast.parse(code)
     extracted = orchestrator.extract_imported_modules(tree, "src.sub.file")
-    
+
     # Validation of structural extraction
     assert "package.module" in extracted
     assert "package.module.symbol" in extracted
     assert "package.module.alias" not in extracted # Alias is NOT a dependency
-    
+
     # Now use resolve_imported_files
     all_py_files = [
         "package/module.py",
@@ -309,7 +309,7 @@ from ..package import symbol
         "src/user.py"
     ]
     resolved = orchestrator.resolve_imported_files(extracted, ".", all_py_files)
-    
+
     expected_resolved = {
         "package/module.py",
         "package/__init__.py",
@@ -346,24 +346,24 @@ def test_R008_audit_oversized():
 def test_R009_coder_promptbudget(mock_runtime):
     action = {"filepath": "a.py", "operation": "MODIFY", "signatures": "", "instructions": "test"}
     file_contract = orchestrator.FileContract(
-        filepath="a.py", required_exports=[], required_structures={}, 
-        required_imports=[], forbidden_imports=[], required_decorators=[], 
-        required_quality_tools=[], forbidden_quality_tools=[], 
+        filepath="a.py", required_exports=[], required_structures={},
+        required_imports=[], forbidden_imports=[], required_decorators=[],
+        required_quality_tools=[], forbidden_quality_tools=[],
         required_testing_techniques=[], forbidden_testing_techniques=[]
     )
     repo_context = MagicMock()
     repo_context.quality_policy = MagicMock()
     manager = MagicMock()
     manager.get_file_content.return_value = "small existing code"
-    
+
     design = {"context": "x" * 600000} # Huge optional context
     feedback = "y" * 600000 # Huge optional feedback
-    
+
     # Comportamiento FINAL esperado: NO PreflightError tardío, generate_content invocado, obligatorios presentes
     mock_runtime.ai_client.models.generate_content.return_value.text = "Mock Report"
-    
+
     orchestrator.agent_implement_code(action, file_contract, design, {}, repo_context, mock_runtime, manager, feedback)
-    
+
     mock_runtime.ai_client.models.generate_content.assert_called()
     call_args = mock_runtime.ai_client.models.generate_content.call_args[1]["contents"]
     assert "small existing code" in call_args
@@ -377,24 +377,24 @@ def test_R009b_coder_promptbudget_huge_mandatory_preflight(mock_runtime):
     repo_context.quality_policy = MagicMock()
     manager = MagicMock()
     manager.get_file_content.return_value = "small code"
-    
+
     design = {"context": "small context"}
     feedback = "small feedback"
-    
+
     mock_runtime.ai_client.models.generate_content.return_value.text = "Mock Report"
-    
+
     with pytest.raises(orchestrator.PreflightError):
         orchestrator.agent_implement_code(action, file_contract, design, {}, repo_context, mock_runtime, manager, feedback)
-        
+
     assert mock_runtime.ai_client.models.generate_content.call_count == 0
 
 
 def test_R010_test_generator_promptbudget(mock_runtime):
     action = {"filepath": "a.py", "operation": "CREATE", "signatures": "", "instructions": "test"}
     file_contract = orchestrator.FileContract(
-        filepath="a.py", required_exports=[], required_structures={}, 
-        required_imports=[], forbidden_imports=[], required_decorators=[], 
-        required_quality_tools=[], forbidden_quality_tools=[], 
+        filepath="a.py", required_exports=[], required_structures={},
+        required_imports=[], forbidden_imports=[], required_decorators=[],
+        required_quality_tools=[], forbidden_quality_tools=[],
         required_testing_techniques=[], forbidden_testing_techniques=[]
     )
     repo_context = MagicMock()
@@ -403,14 +403,14 @@ def test_R010_test_generator_promptbudget(mock_runtime):
     repo_context.quality_policy.require_argument_annotations = False
     manager = MagicMock()
     manager.get_file_content.return_value = ""
-    
+
     design = {"context": "z" * 600000} # Huge optional context
     feedback = "w" * 600000 # Huge optional feedback
-    
+
     mock_runtime.ai_client.models.generate_content.return_value.text = "Mock Report"
-    
+
     orchestrator.agent_generate_tests(action, file_contract, design, {}, repo_context, "pytest", mock_runtime, manager, feedback)
-    
+
     mock_runtime.ai_client.models.generate_content.assert_called()
     call_args = mock_runtime.ai_client.models.generate_content.call_args[1]["contents"]
     assert "a.py" in call_args
@@ -426,14 +426,14 @@ def test_R011_execution_report(mock_runtime):
     generated = {"a.py": "code"}
     # Should not raise exception, should truncate intelligently
     mock_runtime.ai_client.models.generate_content.return_value = MagicMock(text="Mock")
-    
+
     with patch("os.makedirs"), patch("builtins.open"):
         orchestrator.agent_generate_execution_report(design, generated, pytest_log, sast_report, 1, "Title", mock_runtime)
-        
+
     mock_gen = mock_runtime.ai_client.models.generate_content
     mock_gen.assert_called()
     prompt_sent = mock_gen.call_args[1]["contents"]
-    
+
     # The prompt should contain evidence of the manifest and represent FAILED messages
     assert "a.py" in prompt_sent
     assert "FAILED" in prompt_sent
@@ -445,10 +445,10 @@ def test_R012_postmortem_promptbudget(mock_runtime):
     gate = orchestrator.GateResult(attempt=1, name="Test", passed=False, output="x" * 500000, executed=True)
     generated = {"a.py": "code"}
     mock_runtime.ai_client.models.generate_content.return_value = MagicMock(text="Mock")
-    
+
     with patch("os.makedirs"), patch("builtins.open"):
         result = orchestrator.agent_analyze_pipeline_failure(1, "Title", "Desc", {}, generated, [gate], mock_runtime)
-        
+
     assert not result.startswith("Error de diagnostico"), "Ocurrió un PreflightError capturado internamente"
     mock_runtime.ai_client.models.generate_content.assert_called()
     call_args = mock_runtime.ai_client.models.generate_content.call_args[1]["contents"]
@@ -458,32 +458,32 @@ def test_R013_postmortem_related_files(mock_runtime):
     output = "error in src/a.py\n" + "x" * 500000 + "\nerror in src/b.py"
     gate = orchestrator.GateResult(attempt=1, name="Test", passed=False, output=output, executed=True)
     generated = {"src/a.py": "code a", "src/b.py": "code b", "src/c.py": "code c"}
-    
+
     with patch.object(mock_runtime.ai_client.models, "generate_content") as mock_gen, \
          patch("os.makedirs"), patch("builtins.open"), patch("orchestrator.ensure_prompt_fits"):
         mock_gen.return_value = MagicMock(text="OK")
-        
+
         result = orchestrator.agent_analyze_pipeline_failure(1, "Title", "Desc", {}, generated, [gate], mock_runtime)
-        
+
         # Verify it didn't fail due to PreflightError
         assert not result.startswith("Error de diagnostico"), "Ocurrió un PreflightError capturado internamente"
-        
+
         prompt = mock_gen.call_args[1]["contents"]
-        
+
         # Check sections
         import re
         related_section = re.search(r'CÓDIGO GENERADO RELACIONADO:(.*?)RESTO DEL CÓDIGO GENERADO:', prompt, re.DOTALL)
         assert related_section, "Falta sección CÓDIGO GENERADO RELACIONADO"
         related_content = related_section.group(1)
-        
+
         other_section = re.search(r'RESTO DEL CÓDIGO GENERADO:(.*?)GATES EXITOSOS', prompt, re.DOTALL)
         assert other_section, "Falta sección RESTO DEL CÓDIGO GENERADO"
         other_content = other_section.group(1)
-        
+
         assert "src/a.py" in related_content
         assert "src/b.py" in related_content
         assert "src/c.py" in other_content
-        
+
         assert "src/b.py" not in other_content
 
 # =====================================================================
@@ -493,7 +493,7 @@ def test_R014_architecture_updater_success(mock_runtime):
     mock_runtime.ai_client.models.generate_content.return_value = MagicMock(text="```markdown\n# Doc\n```")
     repo_context = MagicMock()
     repo_context.repository_map = {"root": "."}
-    
+
     with patch("os.makedirs"):
         with patch("builtins.open"):
             result = orchestrator.agent_update_architecture_doc(1, "Title", "Desc", {}, {}, "Old", [], "Diff", mock_runtime)
@@ -503,7 +503,7 @@ def test_R015_architecture_updater_mandatory_budget(mock_runtime):
     # Huge description, fixed instructions etc should overflow
     desc = "x" * 400000
     mock_runtime.ai_client.models.generate_content.return_value = MagicMock(text="Mock Report")
-    
+
     with pytest.raises(orchestrator.PreflightError):
         orchestrator.agent_update_architecture_doc(1, "Title", desc, {}, {}, "Old", [], "Diff", mock_runtime)
     mock_runtime.ai_client.models.generate_content.assert_not_called()
@@ -514,7 +514,7 @@ def test_R015_architecture_updater_mandatory_budget(mock_runtime):
 def test_R016_api_signatures():
     import inspect
     import ast
-    
+
     expected_signatures = {
         "run_mypy": "def run_mypy(filepaths: list[str], policy: 'PythonQualityPolicy') -> tuple[bool, str]",
         "run_static_analysis": "def run_static_analysis(generated_filepaths: list[str], plan: 'QualityGatePlan', test_paths: Collection[str] | None=None) -> tuple[bool, str]",
@@ -523,23 +523,23 @@ def test_R016_api_signatures():
         "agent_generate_execution_report": "def agent_generate_execution_report(design: dict, generated_files: dict[str, str], pytest_log: str, sast_report: str, issue_id: int, title: str, runtime: RuntimeClients) -> str",
         "agent_update_architecture_doc": "def agent_update_architecture_doc(issue_id: int, title: str, description: str, design: dict, generated_files: dict[str, str], current_arch_doc: str, gate_results: list[GateResult], git_diff: str, runtime: RuntimeClients) -> str",
         "agent_update_user_manual": "def agent_update_user_manual(issue_id: int, title: str, description: str, design: dict, generated_files: dict[str, str], runtime: RuntimeClients) -> str",
-        "agent_analyze_pipeline_failure": "def agent_analyze_pipeline_failure(issue_id: int, title: str, description: str, design: dict, generated_files: dict[str, str], gate_results: list[GateResult], runtime: RuntimeClients) -> str",
+        "agent_analyze_pipeline_failure": "def agent_analyze_pipeline_failure(issue_id: int, title: str, description: str, design: dict, generated_files: dict[str, str], gate_results: list[GateResult], runtime: RuntimeClients, error_msg: str='', pipeline_exc: Exception | None=None) -> str",
         "agent_code_reviewer": "def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_desc: str, contract: AcceptanceContract, repo_context: RepositoryContext, runtime: RuntimeClients) -> CodeReviewResult",
         "agent_security_audit": "def agent_security_audit(design: dict, generated_files: dict[str, str], contract: AcceptanceContract, runtime: RuntimeClients, repo_context: RepositoryContext) -> SecurityAuditResult",
         "run_pipeline": "def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeClients) -> None",
     }
-    
+
     for name, expected_signature in expected_signatures.items():
         func = getattr(orchestrator, name)
-        
+
         # Validamos que el objeto exportado tiene firma pública
         sig = inspect.signature(func)
         assert sig is not None
-        
+
         # Extraemos el código fuente independientemente de su ubicación física
         source = inspect.getsource(func)
         tree = ast.parse(source)
-        
+
         # Preservamos la validación exacta del AST
         sigs = orchestrator.extract_ast_signatures(tree)
         assert sigs[name] == expected_signature
@@ -562,7 +562,7 @@ def test_R018_import_safety():
     import ast
     with open(orchestrator.__file__, "r", encoding="utf-8") as f:
         tree = ast.parse(f.read())
-        
+
     for node in tree.body:
         if isinstance(node, ast.Assign):
             if isinstance(node.value, ast.Call):
@@ -584,3 +584,148 @@ def test_R018_import_safety():
 
 
 
+
+
+
+
+def test_D1_acceptance_contract_prompt_fstring():
+    from orchestrator_core.planning_agents import agent_generate_acceptance_contract
+    from unittest.mock import patch, MagicMock
+    import json
+
+    mock_runtime = MagicMock()
+    mock_repo_context = MagicMock()
+    # Ensure it's json serializable
+    mock_repo_context.quality_policy.model_dump.return_value = {}
+    mock_repo_context.structured_config.testing_policy.framework = "pytest"
+    mock_repo_context.structured_config.dependencies = []
+    mock_repo_context.structured_config.dev_dependencies = []
+
+    with patch("orchestrator_core.planning_agents.ensure_prompt_fits"), \
+         patch("orchestrator_core.schemas.AcceptanceContract"):
+
+        # Prevent actually calling LLM, we just want to inspect the prompt
+        def mock_generate_content(*args, **kwargs):
+            raise RuntimeError("STOP")
+        mock_runtime.ai_client.models.generate_content.side_effect = mock_generate_content
+
+        try:
+            agent_generate_acceptance_contract("Issue", "Desc", mock_repo_context, mock_runtime)
+        except Exception as e:
+            if "STOP" not in str(e):
+                raise
+
+        # Get the rendered prompt
+        calls = mock_runtime.ai_client.models.generate_content.call_args_list
+        assert len(calls) > 0, "No prompt was generated"
+        prompt = calls[0][1].get("contents", "")
+        if not prompt and len(calls[0][0]) > 0:
+            prompt = calls[0][0][0]
+
+        assert prompt, "Prompt is empty"
+        assert '{"module.py": {"PublicClass": "class PublicClass(arg1: int)", "public_function": "def public_function()"}}' in prompt, "Failed to find exactly 1 pair of braces for dict in prompt"
+
+def test_D2_catastrophic_failure_diagnosis(mock_runtime, tmp_path):
+    import orchestrator
+    from unittest.mock import patch, MagicMock
+
+    # Mock eligibility and fetch
+    child_issue = MagicMock()
+    child_label = MagicMock()
+    child_label.name = "ai:ready-to-code"
+    child_issue.labels = [child_label]
+    child_issue.body = "PO_PARENT_EPIC=2\nPO_CHILD_INDEX=1\nFINGERPRINT=0123456789abcdef"
+
+    parent_epic = MagicMock()
+    parent_label = MagicMock()
+    parent_label.name = "gate:deployed"
+    parent_epic.labels = [parent_label]
+
+    def mock_get_issue(number):
+        if number == 1: return child_issue
+        if number == 2: return parent_epic
+        raise Exception("Not found")
+    mock_runtime.repo.get_issue.side_effect = mock_get_issue
+
+    with patch("orchestrator.agent_generate_acceptance_contract", side_effect=ValueError("synthetic contract prompt failure")), \
+         patch("orchestrator.agent_analyze_pipeline_failure", return_value="Dummy Report") as mock_analyze, \
+         patch("orchestrator.agent_analyze_and_design") as mock_design, \
+         patch("orchestrator.agent_implement_code") as mock_implement, \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.RepositoryContextManager") as MockRCM:
+
+        mock_rcm = MockRCM.return_value
+        mock_repo_context = MagicMock()
+        mock_repo_context.architecture_conflicts = []
+        mock_rcm.build_repository_context.return_value = mock_repo_context
+
+        with pytest.raises(ValueError, match="synthetic contract prompt failure"):
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+        # Verify no design/implementation executed
+        mock_design.assert_not_called()
+        mock_implement.assert_not_called()
+
+        # Verify analyze was called with correct context
+        mock_analyze.assert_called_once()
+        args, kwargs = mock_analyze.call_args
+        flat_gates = args[5] # flat_gates is the 6th positional arg
+
+        # Verify contract_generation failure is in flat_gates
+        contract_gate = next((g for g in flat_gates if g.name == "contract_generation"), None)
+        assert contract_gate is not None
+        assert contract_gate.passed is False
+        assert "ValueError" in contract_gate.output
+        assert "synthetic contract prompt failure" in contract_gate.output
+
+        # Verify exception details passed via kwargs
+        assert kwargs.get("error_msg", "") != ""
+        assert "synthetic contract prompt failure" in kwargs.get("error_msg", "")
+        assert isinstance(kwargs.get("pipeline_exc"), ValueError)
+
+def test_D2_failure_analysis_prompt_semantics(mock_runtime):
+    from orchestrator_core.failure_analysis_agents import agent_analyze_pipeline_failure
+    from orchestrator_core.schemas import GateResult
+    from unittest.mock import patch
+
+    gate = GateResult(
+        attempt=1,
+        name="contract_generation",
+        executed=True,
+        passed=False,
+        output="ValueError: synthetic contract prompt failure"
+    )
+
+    with patch("orchestrator_core.failure_analysis_agents.ensure_prompt_fits"):
+        def mock_generate_content(*args, **kwargs):
+            raise RuntimeError("STOP")
+        mock_runtime.ai_client.models.generate_content.side_effect = mock_generate_content
+
+        try:
+            agent_analyze_pipeline_failure(
+                issue_id=5,
+                title="Title",
+                description="Desc",
+                design={},
+                generated_files={},
+                gate_results=[gate],
+                runtime=mock_runtime,
+                error_msg="synthetic contract prompt failure",
+                pipeline_exc=ValueError("synthetic contract prompt failure")
+            )
+        except Exception as e:
+            if "STOP" not in str(e):
+                raise
+
+        calls = mock_runtime.ai_client.models.generate_content.call_args_list
+        assert len(calls) > 0, "No prompt was generated"
+        prompt = calls[0][1].get("contents", "")
+        if not prompt and len(calls[0][0]) > 0:
+            prompt = calls[0][0][0]
+
+        assert "contract_generation" in prompt
+        assert "ValueError" in prompt
+        assert "synthetic contract prompt failure" in prompt
+        assert "El pipeline falló tras agotar los reintentos de calidad" not in prompt
+        assert "El pipeline ha fallado durante su ejecución. Determina la fase real del fallo" in prompt
+        assert "No asumas que se agotaron reintentos" in prompt
