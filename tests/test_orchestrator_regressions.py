@@ -1376,3 +1376,331 @@ def test_D5_B5_retry_cache_semantics_preserved(mock_runtime, tmp_path):
 
         assert any("good.py" in f for f in written_files)
         assert not any("bad.py" in f for f in written_files)
+
+
+import subprocess
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+from orchestrator_core.github_operations import deploy_to_github, _sanitize_staging_area
+
+@pytest.fixture
+def temp_git_repo(tmp_path):
+    """Creates a real temporary git repository for testing staging logic."""
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    subprocess.run(["git", "init"], check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], check=True)
+
+    # Create initial commit
+    Path("README.md").write_text("# Init")
+    subprocess.run(["git", "add", "README.md"], check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], check=True)
+
+    yield tmp_path
+
+    os.chdir(original_cwd)
+
+
+def test_D6_A1_new_pyc_is_excluded(temp_git_repo):
+    Path("module.py").write_text("print('hello')")
+    subprocess.run(["git", "add", "module.py"])
+    subprocess.run(["git", "commit", "-m", "Add module"])
+
+    Path("module.pyc").write_text("fake bytecode")
+    Path("new_module.py").write_text("print('world')")
+
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    result = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+    staged = result.stdout.strip().split('\n')
+
+    assert "new_module.py" in staged
+    assert "module.pyc" not in staged
+
+def test_D6_A2_new_pycache_content_is_excluded(temp_git_repo):
+    os.makedirs("pkg/__pycache__")
+    Path("pkg/__pycache__/module.cpython-313.pyc").write_text("fake")
+    os.makedirs("tests/__pycache__")
+    Path("tests/__pycache__/test_x.cpython-313.pyc").write_text("fake")
+    Path("valid_file.py").write_text("valid")
+
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    result = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+    staged = result.stdout.strip().split('\n')
+
+    assert "valid_file.py" in staged
+    assert not any("__pycache__" in f for f in staged)
+
+def test_D6_A3_nested_generic_path(temp_git_repo):
+    os.makedirs("src/a/b/__pycache__")
+    Path("src/a/b/__pycache__/module.cpython-312.pyc").write_text("fake")
+
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    result = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+    staged = result.stdout.strip().split('\n')
+
+    assert not any("module.cpython-312.pyc" in f for f in staged)
+
+def test_D6_B1_baseline_tracked_matching_path_is_not_silently_deleted(temp_git_repo):
+    os.makedirs("tracked_cache/__pycache__")
+    Path("tracked_cache/__pycache__/tracked.pyc").write_text("tracked")
+    subprocess.run(["git", "add", "-A"])
+    subprocess.run(["git", "commit", "-m", "Track cache"])
+
+    # Run filter
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    # It should still be in the filesystem and tracked
+    assert Path("tracked_cache/__pycache__/tracked.pyc").exists()
+
+    # And if we modify it, it should NOT be unstaged by the filter because diff-filter=A only hits NEW files
+    Path("tracked_cache/__pycache__/tracked.pyc").write_text("modified")
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    result = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+    staged = result.stdout.strip().split('\n')
+    assert "tracked_cache/__pycache__/tracked.pyc" in staged
+
+def test_D6_B2_normal_generated_files_are_preserved(temp_git_repo):
+    os.makedirs("src")
+    Path("src/module.py").write_text("valid")
+
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    result = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+    staged = result.stdout.strip().split('\n')
+    assert "src/module.py" in staged
+
+def test_D6_B3_documentation_metadata_deployment_preserved(temp_git_repo):
+    import os
+    from pathlib import Path
+    import subprocess
+    from unittest.mock import MagicMock, patch
+    from orchestrator_core.github_operations import deploy_to_github
+
+    # Setup initial metadata
+    os.makedirs("docs/metadata", exist_ok=True)
+    Path("docs/metadata/runs_registry.json").write_text("{}")
+    subprocess.run(["git", "add", "-A"])
+    subprocess.run(["git", "commit", "-m", "add meta"])
+
+    # Simulate a pipeline run generating artifacts
+    Path("implementation.py").write_text("impl")
+    os.makedirs("tests", exist_ok=True)
+    Path("tests/test_impl.py").write_text("test")
+    Path("docs/ARCHITECTURE.md").write_text("arch")
+    Path("docs/USER_MANUAL.md").write_text("man")
+    os.makedirs("docs/reports", exist_ok=True)
+    Path("docs/reports/run_issue_5.md").write_text("report")
+    Path("__pycache__").mkdir(exist_ok=True)
+    Path("__pycache__/impl.pyc").write_text("cache")
+
+    mock_runtime = MagicMock()
+    # Mock only network effects
+    orig_run = subprocess.run
+    with patch("orchestrator_core.github_operations.subprocess.run") as mock_run:
+        def side_effect(cmd, **kwargs):
+            if "push" in cmd or "fetch" in cmd:
+                return MagicMock(returncode=0)
+            return orig_run(cmd, **kwargs)
+        mock_run.side_effect = side_effect
+
+        # Let write_transactional_metadata run, we just need the file updated
+        # It's actually not mocked, we let it run so it updates docs/metadata/runs_registry.json
+        design = {"architecture_justification": "just"}
+        generated_files = {"implementation.py": "impl", "tests/test_impl.py": "test"}
+
+        deploy_to_github(
+            design=design,
+            generated_files=generated_files,
+            report_path="docs/reports/run_issue_5.md",
+            arch_path="docs/ARCHITECTURE.md",
+            user_manual_path="docs/USER_MANUAL.md",
+            issue_id=5,
+            run_id="RUN-5",
+            runtime=mock_runtime
+        )
+
+    # Verify implementation commit (HEAD~1)
+    code_result = subprocess.run(["git", "show", "--name-only", "--oneline", "HEAD~1"], capture_output=True, text=True)
+    code_files = code_result.stdout.strip().split('\n')
+    assert "implementation.py" in code_files
+    assert "tests/test_impl.py" in code_files
+    assert "docs/ARCHITECTURE.md" in code_files
+    assert "docs/USER_MANUAL.md" in code_files
+    assert "docs/reports/run_issue_5.md" in code_files
+    assert not any("impl.pyc" in f for f in code_files)
+
+    # Verify metadata commit (HEAD)
+    meta_result = subprocess.run(["git", "show", "--name-only", "--oneline", "HEAD"], capture_output=True, text=True)
+    meta_files = meta_result.stdout.strip().split('\n')
+    assert "docs/metadata/runs_registry.json" in meta_files
+
+def test_D6_B4_deletions_modifications_preserved(temp_git_repo):
+    Path("to_delete.py").write_text("delete")
+    Path("to_modify.py").write_text("modify")
+    subprocess.run(["git", "add", "-A"])
+    subprocess.run(["git", "commit", "-m", "Initial"])
+
+    os.remove("to_delete.py")
+    Path("to_modify.py").write_text("modified")
+
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    result = subprocess.run(["git", "diff", "--cached", "--name-status"], capture_output=True, text=True)
+    status = result.stdout.strip()
+    assert "D\tto_delete.py" in status or "D\tto_delete.py" in status.replace(" ", "") or "D  to_delete.py" in status.replace("\t", "  ")
+    assert "M\tto_modify.py" in status or "M\tto_modify.py" in status.replace(" ", "") or "M  to_modify.py" in status.replace("\t", "  ")
+
+def test_real_run_5_reproduction_test(temp_git_repo):
+    # Setup directories
+    os.makedirs("memory/__pycache__", exist_ok=True)
+    os.makedirs("tests/__pycache__", exist_ok=True)
+
+    # Simulate generation
+    Path("memory/schemas.py").write_text("schemas")
+    Path("memory/state_manager.py").write_text("state")
+    Path("tests/test_schemas.py").write_text("test_schemas")
+    Path("tests/test_state_manager.py").write_text("test_state")
+
+    # Simulate pycache
+    Path("memory/__pycache__/schemas.cpython-313.pyc").write_text("cache")
+    Path("memory/__pycache__/state_manager.cpython-313.pyc").write_text("cache")
+    Path("tests/__pycache__/test_schemas.cpython-313.pyc").write_text("cache")
+    Path("tests/__pycache__/test_state_manager.cpython-313.pyc").write_text("cache")
+
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+
+    result = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+    staged = result.stdout.strip().split('\n')
+
+    assert "memory/schemas.py" in staged
+    assert "memory/state_manager.py" in staged
+    assert "tests/test_schemas.py" in staged
+    assert "tests/test_state_manager.py" in staged
+
+    assert not any("schemas.cpython-313.pyc" in f for f in staged)
+    assert not any("state_manager.cpython-313.pyc" in f for f in staged)
+
+
+def test_D6_C1_staged_documentation_evidence_is_clean(mock_runtime, temp_git_repo, tmp_path):
+    from orchestrator_core.schemas import PythonFileSummary, RepositoryContext, PythonQualityPolicy, PythonProjectConfiguration
+    from orchestrator_core.planning_agents import AcceptanceContract
+    from orchestrator import run_pipeline
+    import orchestrator
+    import subprocess
+    from pathlib import Path
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "legitimate.py", "file_type": "source", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=False, run_static_analysis=False, run_ruff=False, run_vulture=False)
+
+    class MockRCM:
+        def build_repository_context(self, *args, **kwargs): return repo_context
+        def get_file_content(self, *args, **kwargs): return ""
+
+    reviewer_mock = MagicMock(approved=True, design_conflict=False)
+    reviewer_mock.model_dump.return_value = {"approved": True, "design_conflict": False}
+    auditor_mock = MagicMock(approved=True)
+    auditor_mock.model_dump.return_value = {"approved": True}
+
+    child_issue = MagicMock()
+    ready_label = MagicMock()
+    ready_label.name = "ai:ready-to-code"
+    child_issue.labels = [ready_label]
+    child_issue.body = "PO_PARENT_EPIC=2\nPO_CHILD_INDEX=1\nFINGERPRINT=0123456789abcdef"
+
+    parent_epic = MagicMock()
+    deployed_label = MagicMock()
+    deployed_label.name = "gate:deployed"
+    parent_epic.labels = [deployed_label]
+
+    def mock_get_issue(*args, **kwargs):
+        num = kwargs.get("number", args[0] if args else 1)
+        if num == 1: return child_issue
+        if num == 2: return parent_epic
+        return MagicMock()
+    mock_runtime.repo.get_issue.side_effect = mock_get_issue
+
+    patches = [
+        patch("orchestrator.RepositoryContextManager", return_value=MockRCM()),
+        patch("orchestrator.base_preflight", return_value=[]),
+        patch("orchestrator.fetch_issue", return_value=("T", "D")),
+        patch("orchestrator.agent_generate_acceptance_contract", return_value=contract),
+        patch("orchestrator.validate_contract_consistency", return_value=(True, [])),
+        patch("orchestrator._derive_gate_plan", return_value=gate_plan),
+        patch("orchestrator.validate_testing_policy_compatibility", return_value=[]),
+        patch("orchestrator.tool_preflight", return_value=[]),
+        patch("orchestrator.validate_contract_capabilities", return_value=(True, [])),
+        patch("orchestrator.validate_relevant_context_files", return_value=[]),
+        patch("orchestrator.agent_analyze_and_design", return_value=design),
+        patch("orchestrator.validate_generated_manifest", return_value=(True, "")),
+        patch("orchestrator.validate_final_state", return_value=(True, "")),
+        patch("orchestrator.agent_code_reviewer", return_value=reviewer_mock),
+        patch("orchestrator.agent_security_audit", return_value=auditor_mock),
+        patch("orchestrator.agent_update_architecture_doc", return_value="docs/ARCHITECTURE.md"),
+        patch("orchestrator.run_mypy", return_value=(True, "OK")),
+        patch("orchestrator.build_mypy_scope", return_value=[]),
+        patch("orchestrator.estimate_repository_context_tokens", return_value=0),
+        patch("orchestrator.run_local_tests", return_value=(True, "OK")),
+        patch("orchestrator.agent_generate_tests", return_value="# test code"),
+        patch("orchestrator.agent_implement_code", return_value="# src code"),
+        patch("orchestrator.validate_code_quality", return_value=(True, "OK")),
+        patch("orchestrator.validate_contractual_ast", return_value=[]),
+        patch("orchestrator.materialize_cached_files"),
+        patch("orchestrator.validate_design", return_value=(True, [])),
+        patch("orchestrator.agent_generate_execution_report"),
+        patch("orchestrator.agent_update_user_manual"),
+        patch("orchestrator.deploy_to_github"),
+    ]
+
+    for p in patches: p.start()
+
+    try:
+        def fake_security_audit(*args, **kwargs):
+            Path("__pycache__").mkdir(exist_ok=True)
+            Path("__pycache__/module.cpython-313.pyc").write_text("cache")
+            Path("legitimate.py").write_text("legitimate")
+            return auditor_mock
+
+        with patch("orchestrator.agent_security_audit", side_effect=fake_security_audit):
+            # Also mock the git diff timeout? No, let real git run!
+            run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+        mock_arch_doc = orchestrator.agent_update_architecture_doc
+        assert mock_arch_doc.called
+        git_diff_arg = mock_arch_doc.call_args[0][7]
+        assert "legitimate.py" in git_diff_arg
+        assert ".pyc" not in git_diff_arg
+    finally:
+        for p in patches: p.stop()
+
+def test_D6_C2_lookalike_path_is_not_false_positive(temp_git_repo):
+    import subprocess
+    from pathlib import Path
+    from orchestrator_core.github_operations import _sanitize_staging_area
+
+    Path("src/not__pycache__name").mkdir(parents=True, exist_ok=True)
+    Path("src/not__pycache__name/module.py").write_text("valid module")
+
+    subprocess.run(["git", "add", "-A"])
+    _sanitize_staging_area()
+    diff_result = subprocess.run(["git", "diff", "--staged", "--name-only"], capture_output=True, text=True)
+    staged = diff_result.stdout.strip().split('\n')
+
+    assert "src/not__pycache__name/module.py" in staged

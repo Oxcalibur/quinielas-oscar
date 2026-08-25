@@ -407,7 +407,7 @@ from orchestrator_core.review_agents import agent_code_reviewer, agent_security_
 from orchestrator_core.documentation_agents import agent_update_architecture_doc, agent_update_user_manual, agent_generate_execution_report
 from orchestrator_core.failure_analysis_agents import agent_analyze_pipeline_failure
 from orchestrator_core.logging_metadata import write_local_log, write_transactional_metadata
-from orchestrator_core.github_operations import fetch_issue, deploy_to_github, ensure_git_setup
+from orchestrator_core.github_operations import fetch_issue, deploy_to_github, ensure_git_setup, _sanitize_staging_area
 
 
 
@@ -1090,6 +1090,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
         # Stage all changes to get a clean diff for documentation
         # This includes new files, modifications, and deletions that have been processed.
         subprocess.run(["git", "add", "-A"], check=True, timeout=60)
+        _sanitize_staging_area()
         diff_result = subprocess.run(["git", "diff", "--staged"], capture_output=True, text=True, timeout=120)
         git_diff = diff_result.stdout
 

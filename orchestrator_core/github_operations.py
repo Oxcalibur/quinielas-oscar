@@ -12,6 +12,19 @@ def fetch_issue(issue_id: int, repo) -> tuple[str, str]:
     return issue.title, issue.body
 
 
+def _sanitize_staging_area() -> None:
+    """
+    Remove newly created transient Python artifacts (*.pyc, __pycache__) from the staging area.
+    This prevents test execution artifacts from polluting the generated PR,
+    while preserving any such files that were already tracked in the baseline.
+    """
+    result = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=A"], capture_output=True, text=True, check=True, timeout=60)
+    added_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
+    for file_path in added_files:
+        path_segments = file_path.replace('\\', '/').split('/')
+        if "__pycache__" in path_segments or file_path.endswith(".pyc"):
+            subprocess.run(["git", "reset", "HEAD", "--", file_path], check=True, timeout=60)
+
 def deploy_to_github(design: dict, generated_files: dict[str, str], report_path: str, arch_path: str, user_manual_path: str, issue_id: int, run_id: str, runtime: RuntimeClients) -> None:
     logging.info("Inicializando PR de alta trazabilidad...")
     commit_title = f"feat(issue-{issue_id}): [{run_id}] refactorizacion y solucion modular evolutiva"
@@ -20,6 +33,10 @@ def deploy_to_github(design: dict, generated_files: dict[str, str], report_path:
     try:
         # Stage all changes automatically: new files, modifications, and deletions.
         subprocess.run(["git", "add", "-A"], check=True, timeout=60)
+
+        # D6: Sanitize the staging area before committing
+        _sanitize_staging_area()
+
         subprocess.run(["git", "commit", "-m", commit_title, "-m", commit_body], check=True, timeout=60)
 
         # Obtener el hash del commit de implementación
