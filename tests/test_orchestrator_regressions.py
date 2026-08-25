@@ -35,6 +35,29 @@ def test_R001_mypy_native_files(mock_runtime, tmp_path):
     repo_context.structured_config.dev_dependencies = []
     repo_context.quality_policy = MagicMock()
     
+    child_issue = MagicMock()
+    ready_label = MagicMock()
+    ready_label.name = "ai:ready-to-code"
+    child_issue.labels = [ready_label]
+    child_issue.body = (
+        "PO_PARENT_EPIC=2\n"
+        "PO_CHILD_INDEX=1\n"
+        "FINGERPRINT=0123456789abcdef"
+    )
+
+    parent_epic = MagicMock()
+    deployed_label = MagicMock()
+    deployed_label.name = "gate:deployed"
+    parent_epic.labels = [deployed_label]
+
+    def mock_get_issue(number):
+        if number == 1:
+            return child_issue
+        if number == 2:
+            return parent_epic
+        raise Exception("Not found")
+
+    mock_runtime.repo.get_issue.side_effect = mock_get_issue
     with patch("orchestrator.RepositoryContextManager") as MockRCM, \
          patch("orchestrator.base_preflight", return_value=[]), \
          patch("orchestrator.fetch_issue", return_value=("T", "D")), \
@@ -103,6 +126,29 @@ def test_R002_mypy_inferred_scope(mock_runtime, tmp_path):
     repo_context.structured_config.dev_dependencies = []
     repo_context.quality_policy = MagicMock()
     
+    child_issue = MagicMock()
+    ready_label = MagicMock()
+    ready_label.name = "ai:ready-to-code"
+    child_issue.labels = [ready_label]
+    child_issue.body = (
+        "PO_PARENT_EPIC=2\n"
+        "PO_CHILD_INDEX=1\n"
+        "FINGERPRINT=0123456789abcdef"
+    )
+
+    parent_epic = MagicMock()
+    deployed_label = MagicMock()
+    deployed_label.name = "gate:deployed"
+    parent_epic.labels = [deployed_label]
+
+    def mock_get_issue(number):
+        if number == 1:
+            return child_issue
+        if number == 2:
+            return parent_epic
+        raise Exception("Not found")
+
+    mock_runtime.repo.get_issue.side_effect = mock_get_issue
     with patch("orchestrator.RepositoryContextManager") as MockRCM, \
          patch("orchestrator.base_preflight", return_value=[]), \
          patch("orchestrator.fetch_issue", return_value=("T", "D")), \

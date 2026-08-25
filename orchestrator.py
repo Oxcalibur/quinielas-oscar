@@ -505,6 +505,44 @@ def handle_pipeline_failure(
     if pipeline_exc:
         raise pipeline_exc
 
+def validate_issue_eligibility(issue_id: int, runtime: RuntimeClients) -> None:
+    try:
+        issue = runtime.repo.get_issue(number=issue_id)
+    except Exception as e:
+        raise PreflightError(f"No se pudo obtener el Issue #{issue_id}: {e}")
+
+    labels = [l.name for l in issue.labels]
+    if "ai:ready-to-code" not in labels:
+        raise PreflightError(f"El Issue #{issue_id} no tiene la etiqueta 'ai:ready-to-code'.")
+
+    # Check PO deployment metadata
+    body = issue.body or ""
+    import re
+    parent_match = re.search(r"PO_PARENT_EPIC=(\d+)", body)
+    index_match = re.search(r"PO_CHILD_INDEX=(\d+)", body)
+    fingerprint_match = re.search(r"FINGERPRINT=([a-f0-9]{16})", body)
+    if not parent_match or not index_match or not fingerprint_match:
+        raise PreflightError(f"El Issue #{issue_id} no contiene metadata de PO (PO_PARENT_EPIC, PO_CHILD_INDEX, FINGERPRINT validos).")
+
+    parent_epic_id = int(parent_match.group(1))
+    try:
+        parent_epic = runtime.repo.get_issue(number=parent_epic_id)
+    except Exception:
+        raise PreflightError(f"Parent Epic #{parent_epic_id} referenced by Issue #{issue_id} no existe.")
+
+    parent_labels = [l.name for l in parent_epic.labels]
+    if "gate:deployed" not in parent_labels:
+        raise PreflightError(f"Parent Epic #{parent_epic_id} no tiene la etiqueta 'gate:deployed'.")
+
+def transition_issue_status(issue_id: int, runtime: RuntimeClients) -> None:
+    issue_to_update = runtime.repo.get_issue(number=issue_id)
+    issue_to_update.remove_from_labels("ai:ready-to-code")
+    try:
+        runtime.repo.get_label("status:in-progress")
+    except Exception:
+        runtime.repo.create_label("status:in-progress", "fef2c0")
+    issue_to_update.add_to_labels("status:in-progress")
+
 def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeClients) -> None:
     context_manager = RepositoryContextManager()
     pipeline_passed = False
@@ -514,18 +552,8 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
     all_attempt_results: list[list[GateResult]] = []
     flat_gates: list[GateResult] = []
     try:
-        issue_to_update = runtime.repo.get_issue(number=issue_id)
-        if "ai:ready-to-code" in [l.name for l in issue_to_update.labels]: 
-            issue_to_update.remove_from_labels("ai:ready-to-code")
-        try: 
-            runtime.repo.get_label("status:in-progress")
-        except: 
-            runtime.repo.create_label("status:in-progress", "fef2c0")
-        issue_to_update.add_to_labels("status:in-progress")
-    except: 
-        pass
-
-    try:
+        validate_issue_eligibility(issue_id, runtime)
+        transition_issue_status(issue_id, runtime)
         title, desc = fetch_issue(issue_id, runtime.repo)
         logging.info(f"Pipeline iniciado - Issue #{issue_id}: '{title}'")
         
@@ -1074,14 +1102,22 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             write_local_log(issue_id, title, True, "Despliegue y PR completado.", run_log_dir)
         except Exception as e:
             write_local_log(issue_id, title, False, f"Fallo Git al desplegar: {e}", run_log_dir)
+            raise
     except Exception as pipeline_exc:
         # Flatten any nested gate lists and pass flat_gates which already includes initial_gates
         handle_pipeline_failure(issue_id, title, str(pipeline_exc), run_log_dir, runtime, pipeline_exc, gate_results=flat_gates, design=design, generated_files=generated_files, issue_description=desc)
+
+def normalize_remote(remote_url: str) -> str:
+    match = re.search(r'(?:github\.com[:/])(.*?)(?:\.git)?$', remote_url)
+    return match.group(1) if match else remote_url
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Framework de Agentes Autonomos SDLC")
     parser.add_argument("--issue", type=int, required=True, help="Numero del Issue a procesar")
+    parser.add_argument("--target-repo", type=str, help="GitHub repo (ej. Oxcalibur/bookai-engine)")
+    parser.add_argument("--target-workspace", type=str, help="Ruta local absoluta al target")
+    parser.add_argument("--target-branch", type=str, default="main", help="Base branch del target")
     args = parser.parse_args()
 
     original_cwd = os.getcwd()
@@ -1091,25 +1127,78 @@ if __name__ == "__main__":
     run_log_dir = os.path.join(original_cwd, ".agent-runs", run_id)
     os.makedirs(run_log_dir, exist_ok=True)
     
-    worktree_dir = os.path.join(".agent-worktrees", run_id)
+    worktree_dir = os.path.join(original_cwd, ".agent-worktrees", run_id)
+    worktree_created = False
     
     try:
-        # 1. Prepare main repository
-        ensure_git_setup()
+        # 1. O1: VALIDATE TARGET ISOLATION
+        if bool(args.target_repo) != bool(args.target_workspace):
+            print("Error: Se deben proveer ambos o ninguno (--target-repo y --target-workspace)")
+            sys.exit(1)
 
-        # 2. Prepare isolated worktree with its own branch
-        branch_name = f"agent/issue-{args.issue}/{run_id}"
-        logging.info(f"Creando worktree aislado en '{worktree_dir}' en la rama '{branch_name}'")
-        subprocess.run(
-            ["git", "worktree", "add", "-b", branch_name, worktree_dir, "origin/main"],
-            check=True, capture_output=True, text=True, timeout=120
-        )
-        
+        if args.target_repo and args.target_workspace:
+            if not os.path.isdir(args.target_workspace):
+                print(f"Error: Target workspace no existe: {args.target_workspace}")
+                sys.exit(1)
+            target_info = {}
+            try:
+                root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=args.target_workspace, text=True, stderr=subprocess.DEVNULL).strip()
+                origin = subprocess.check_output(["git", "remote", "get-url", "origin"], cwd=args.target_workspace, text=True, stderr=subprocess.DEVNULL).strip()
+                head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=args.target_workspace, text=True, stderr=subprocess.DEVNULL).strip()
+                branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=args.target_workspace, text=True, stderr=subprocess.DEVNULL).strip()
+                target_info = {"root": os.path.normpath(root), "origin": origin, "head": head, "branch": branch}
+            except Exception:
+                print(f"Error: Target workspace no es un repositorio Git: {args.target_workspace}")
+                sys.exit(1)
+
+            target_origin = normalize_remote(target_info["origin"])
+            if target_origin != args.target_repo:
+                print(f"Error: Target origin mismatch. Esperado: {args.target_repo}, Actual: {target_origin}")
+                sys.exit(1)
+
+            if target_info["branch"] != args.target_branch:
+                print(f"Error: Target branch '{target_info['branch']}' no coincide con el base declarado '{args.target_branch}'.")
+                sys.exit(1)
+
+            try:
+                status = subprocess.check_output(["git", "status", "--porcelain"], cwd=args.target_workspace, text=True, stderr=subprocess.PIPE).strip()
+                if status:
+                    print(f"Error: Target workspace '{args.target_workspace}' no está limpio (tiene archivos modificados o untracked).")
+                    sys.exit(1)
+            except Exception:
+                print(f"Error verificando estado git en Target '{args.target_workspace}'.")
+                sys.exit(1)
+
+            # 2. O2/Platform-Side Credentials: Build runtime and check eligibility BEFORE worktree creation
+            runtime = build_runtime_clients(target_repo=getattr(args, 'target_repo', None))
+            validate_issue_eligibility(args.issue, runtime)
+
+            # 3. Prepare isolated worktree linked to TARGET workspace
+            branch_name = f"agent/issue-{args.issue}/{run_id}"
+            logging.info(f"Creando worktree aislado en '{worktree_dir}' en la rama '{branch_name}' vinculado al TARGET {args.target_workspace}")
+            subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, worktree_dir, target_info["head"]],
+                cwd=args.target_workspace, check=True, capture_output=True, text=True, timeout=120
+            )
+            worktree_created = True
+        else:
+            # Fallback for existing tests that don't pass --target-repo (backward compatibility)
+            ensure_git_setup()
+
+            # Build runtime and check eligibility in platform context
+            runtime = build_runtime_clients(target_repo=None)
+            validate_issue_eligibility(args.issue, runtime)
+
+            branch_name = f"agent/issue-{args.issue}/{run_id}"
+            logging.info(f"Creando worktree aislado en '{worktree_dir}' en la rama '{branch_name}' vinculado a platform origin/main")
+            subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, worktree_dir, "origin/main"],
+                check=True, capture_output=True, text=True, timeout=120
+            )
+            worktree_created = True
+
         os.chdir(worktree_dir)
         
-        # 3. Build runtime clients (loads .env, validates credentials, opens network connections)
-        runtime = build_runtime_clients()
-
         # 4. Run pipeline inside the worktree
         run_pipeline(args.issue, run_id, run_log_dir, runtime)
 
@@ -1122,8 +1211,8 @@ if __name__ == "__main__":
         logging.exception(f"Ocurrió un error inesperado en el pipeline: {e}")
     finally:
         os.chdir(original_cwd)
-        if os.path.exists(worktree_dir):
+        if worktree_created and os.path.exists(worktree_dir):
             logging.info(f"Eliminando worktree: {worktree_dir}")
-            subprocess.run(["git", "worktree", "remove", worktree_dir, "--force"], capture_output=True, text=True, timeout=120)
-        # Limpiar worktrees residuales
-        subprocess.run(["git", "worktree", "prune"], capture_output=True, text=True, timeout=120)
+            cwd = args.target_workspace if getattr(args, 'target_repo', None) and getattr(args, 'target_workspace', None) else original_cwd
+            subprocess.run(["git", "worktree", "remove", worktree_dir, "--force"], cwd=cwd, capture_output=True, text=True, timeout=120)
+            subprocess.run(["git", "worktree", "prune"], cwd=cwd, capture_output=True, text=True, timeout=120)

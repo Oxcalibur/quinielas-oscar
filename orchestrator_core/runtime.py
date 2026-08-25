@@ -17,7 +17,7 @@ class RuntimeClients:
     repo: Any  # github.Repository.Repository
 
 
-def build_runtime_clients() -> RuntimeClients:
+def build_runtime_clients(target_repo: str = None) -> RuntimeClients:
     """Carga credenciales, aplica parches de red y construye los clientes de runtime.
 
     Llamar esta función es el único mecanismo que activa efectos laterales de red.
@@ -60,9 +60,8 @@ def build_runtime_clients() -> RuntimeClients:
         auth=Auth.Token(os.getenv("GITHUB_TOKEN")),
         timeout=60,
     )
-    repo = github_client.get_repo(
-        f"{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}"
-    )
+    repo_name = target_repo if target_repo else f"{os.getenv('REPO_OWNER')}/{os.getenv('REPO_NAME')}"
+    repo = github_client.get_repo(repo_name)
     return RuntimeClients(
         ai_client=ai_client,
         github_client=github_client,

@@ -109,7 +109,7 @@ def test_MOD001_public_apis_still_available():
         "reload_code_after_ruff", "validate_code_quality",
         "parse_compiler_output", "build_mypy_scope", "_derive_gate_plan",
         "validate_testing_policy_compatibility", "run_local_tests",
-        "base_preflight", "tool_preflight"
+        "base_preflight", "tool_preflight", "validate_issue_eligibility", "transition_issue_status"
     ]
     for api in public_apis:
         assert hasattr(orchestrator, api), f"API {api} no está disponible públicamente"
@@ -128,7 +128,9 @@ def test_MOD002_exact_public_signatures():
         "agent_code_reviewer": "def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_desc: str, contract: AcceptanceContract, repo_context: RepositoryContext, runtime: RuntimeClients) -> CodeReviewResult",
         "agent_security_audit": "def agent_security_audit(design: dict, generated_files: dict[str, str], contract: AcceptanceContract, runtime: RuntimeClients, repo_context: RepositoryContext) -> SecurityAuditResult",
         "run_pipeline": "def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeClients) -> None",
-        "build_runtime_clients": "def build_runtime_clients() -> RuntimeClients",
+        "validate_issue_eligibility": "def validate_issue_eligibility(issue_id: int, runtime: RuntimeClients) -> None",
+        "transition_issue_status": "def transition_issue_status(issue_id: int, runtime: RuntimeClients) -> None",
+        "build_runtime_clients": "def build_runtime_clients(target_repo: str=None) -> RuntimeClients",
         "extract_code": "def extract_code(text, language=None)",
         "resolve_mocking_instruction": "def resolve_mocking_instruction(framework: Literal['pytest', 'unittest'], file_contract: FileContract, repo_context: RepositoryContext) -> str",
         "serialize_ast_signature": "def serialize_ast_signature(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> str",
