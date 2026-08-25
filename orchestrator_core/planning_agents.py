@@ -8,12 +8,64 @@ from orchestrator_core.runtime import RuntimeClients
 from orchestrator_core.model_config import MODEL_HEAVY
 from orchestrator_core.exceptions import ContractGenerationError
 
+def _build_gemini_json_schema(raw_schema: dict) -> dict:
+    import copy
+    schema = copy.deepcopy(raw_schema)
+
+    gemini_allowlist = {
+        "$id", "$defs", "$ref", "$anchor", "type", "format", "title",
+        "description", "enum", "items", "prefixItems", "minItems",
+        "maxItems", "minimum", "maximum", "anyOf", "oneOf", "properties",
+        "additionalProperties", "required", "propertyOrdering"
+    }
+
+    strip_keys = {"default", "uniqueItems"}
+
+    def adapt_schema_node(node: dict, path: list) -> None:
+        if not isinstance(node, dict):
+            return
+
+        for k in strip_keys:
+            if k in node:
+                del node[k]
+
+        for k in node:
+            if k not in gemini_allowlist:
+                dot_path = ".".join(path + [k])
+                from orchestrator_core.exceptions import ContractGenerationError
+                raise ContractGenerationError(f"Unsupported schema keyword found: '{k}' at '{dot_path}'")
+
+        if "properties" in node and isinstance(node["properties"], dict):
+            for prop_name, prop_node in node["properties"].items():
+                if isinstance(prop_node, dict):
+                    adapt_schema_node(prop_node, path + ["properties", prop_name])
+
+        if "$defs" in node and isinstance(node["$defs"], dict):
+            for def_name, def_node in node["$defs"].items():
+                if isinstance(def_node, dict):
+                    adapt_schema_node(def_node, path + ["$defs", def_name])
+
+        if "additionalProperties" in node and isinstance(node["additionalProperties"], dict):
+            adapt_schema_node(node["additionalProperties"], path + ["additionalProperties"])
+
+        if "items" in node and isinstance(node["items"], dict):
+            adapt_schema_node(node["items"], path + ["items"])
+
+        for list_key in ["prefixItems", "anyOf", "oneOf"]:
+            if list_key in node and isinstance(node[list_key], list):
+                for i, item_node in enumerate(node[list_key]):
+                    if isinstance(item_node, dict):
+                        adapt_schema_node(item_node, path + [list_key, str(i)])
+
+    adapt_schema_node(schema, ["$root"])
+    return schema
+
 def agent_generate_acceptance_contract(title: str, description: str, repository_context: RepositoryContext, runtime: RuntimeClients) -> AcceptanceContract:
     """
     Generates a structured acceptance contract from the issue description, repository context, and architecture.
     """
     logging.info("Generando Contrato de Aceptación a partir del Issue y contexto del repositorio...")
-    
+
     budget_contract = PromptBudget(max_input_tokens=100000, reserved_output_tokens=8000)
 
     project_config_json = repository_context.structured_config.model_dump_json(indent=2)
@@ -147,13 +199,14 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
     Si un campo no es aplicable, déjalo como una lista o diccionario vacío.
     Responde únicamente con el JSON que se ajuste al esquema `AcceptanceContract`.
     """
-    
+    transport_schema = _build_gemini_json_schema(AcceptanceContract.model_json_schema())
+
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema=AcceptanceContract,
+        response_json_schema=transport_schema,
         temperature=0.1
     )
-    
+
     try:
         ensure_prompt_fits(prompt, budget_contract, "Acceptance Contract")
         response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)

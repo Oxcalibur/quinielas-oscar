@@ -734,3 +734,106 @@ def test_D2_failure_analysis_prompt_semantics(mock_runtime):
         assert "Los defectos, inconsistencias, reglas no soportadas o fallos de síntesis del AcceptanceContract generado son fallos de contexto u orquestación del Orchestrator" in prompt
         assert "La simple necesidad de regenerar o corregir el AcceptanceContract NO DEBE activar la delegación al PO" in prompt
         assert "SOLO SI la evidencia demuestra que el Issue o los requisitos del producto contienen una ambigüedad material" in prompt
+
+def test_D3_acceptance_contract_uses_json_schema_transport():
+    from orchestrator_core.planning_agents import agent_generate_acceptance_contract, _build_gemini_json_schema
+    from orchestrator_core.schemas import AcceptanceContract
+    from orchestrator_core.exceptions import ContractGenerationError
+    from unittest.mock import patch, MagicMock
+    import pytest
+    import json
+
+    mock_runtime = MagicMock()
+    mock_repo_context = MagicMock()
+    mock_repo_context.quality_policy.model_dump.return_value = {}
+    mock_repo_context.structured_config.testing_policy.framework = "pytest"
+    mock_repo_context.structured_config.dependencies = []
+    mock_repo_context.structured_config.dev_dependencies = []
+
+    with patch("orchestrator_core.planning_agents.ensure_prompt_fits"):
+
+        def mock_generate_content(*args, **kwargs):
+            mock_response = MagicMock()
+            # We omit `count` in required_calls to test local Pydantic default semantics (count: int = 1)
+            # We include duplicate files in required_final_files to test local Pydantic uniqueness semantics (set)
+            mock_response.text = '{"required_final_files":["a.py", "a.py"],"required_new_files":[],"required_modified_files":[],"required_deleted_files":[],"preserved_files":[],"relevant_context_files":[],"required_tests":{},"protected_tests":{},"preserved_signatures":{},"preserved_behaviors":[],"forbidden_test_names":[],"forbidden_constructs":{},"required_exports":{},"required_quality_tools":[],"forbidden_quality_tools":[],"required_testing_techniques":[],"forbidden_testing_techniques":[],"required_imports":{},"forbidden_imports":{},"required_calls":{"a.py":{"func":[{"name":"callee"}]}},"required_patterns":{},"required_structures":{},"required_decorators":{}}'
+            return mock_response
+
+        mock_runtime.ai_client.models.generate_content.side_effect = mock_generate_content
+
+        contract = agent_generate_acceptance_contract("Issue", "Desc", mock_repo_context, mock_runtime)
+
+        # I. Returned result is AcceptanceContract
+        assert isinstance(contract, AcceptanceContract), "Failed to validate returned contract"
+
+        # H. Local Pydantic semantics remain authoritative
+        assert contract.required_calls["a.py"]["func"][0].count == 1, "Pydantic failed to apply omitted default count"
+        assert len(contract.required_final_files) == 1, "Pydantic failed to deduplicate set elements"
+        assert "a.py" in contract.required_final_files
+
+        calls = mock_runtime.ai_client.models.generate_content.call_args_list
+        assert len(calls) > 0, "No generate_content call made"
+
+        config = calls[0][1].get("config")
+        assert config is not None, "config was not passed to generate_content"
+
+        # A. response_schema is None
+        assert getattr(config, "response_schema", None) is None
+
+        # B. response_json_schema is not None
+        transport_schema = getattr(config, "response_json_schema", None)
+        assert transport_schema is not None
+
+        raw_schema = AcceptanceContract.model_json_schema()
+        raw_schema_dump = json.dumps(raw_schema)
+
+        # C. RAW Pydantic schema still contains default, uniqueItems, additionalProperties
+        assert "default" in raw_schema_dump
+        assert "uniqueItems" in raw_schema_dump
+        assert "additionalProperties" in raw_schema_dump
+
+        # D. TRANSPORT schema properties
+        transport_schema_dump = json.dumps(transport_schema)
+        assert "default" not in transport_schema_dump
+        assert "uniqueItems" not in transport_schema_dump
+        assert "additionalProperties" in transport_schema_dump
+        assert "$defs" in transport_schema_dump
+        assert "$ref" in transport_schema_dump
+
+        # E. The transport schema contains ZERO unsupported schema keywords
+        gemini_allowlist = {
+            "$id", "$defs", "$ref", "$anchor", "type", "format", "title",
+            "description", "enum", "items", "prefixItems", "minItems",
+            "maxItems", "minimum", "maximum", "anyOf", "oneOf", "properties",
+            "additionalProperties", "required", "propertyOrdering"
+        }
+
+        def crawl_verify(obj):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if k in ["type", "format", "title", "description", "enum", "items",
+                             "prefixItems", "minItems", "maxItems", "minimum", "maximum",
+                             "anyOf", "oneOf", "properties", "additionalProperties",
+                             "required", "propertyOrdering", "default", "examples", "const",
+                             "pattern", "minLength", "maxLength", "deprecated", "readOnly",
+                             "writeOnly", "multipleOf", "exclusiveMinimum", "exclusiveMaximum",
+                             "minProperties", "maxProperties", "uniqueItems"] or k.startswith("$"):
+                        assert k in gemini_allowlist, f"Unsupported keyword '{k}' found in transport schema"
+                    crawl_verify(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    crawl_verify(item)
+
+        crawl_verify(transport_schema)
+
+        # F. RAW schema remains unchanged after adaptation
+        assert raw_schema == AcceptanceContract.model_json_schema()
+
+        # G. response_mime_type
+        assert getattr(config, "response_mime_type", None) == "application/json"
+
+        # Fail-closed future keyword regression
+        bad_schema = {"type": "string", "pattern": "^x$"}
+        with pytest.raises(ContractGenerationError) as exc:
+            _build_gemini_json_schema(bad_schema)
+        assert "pattern" in str(exc.value)
