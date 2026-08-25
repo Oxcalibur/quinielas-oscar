@@ -699,7 +699,6 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             logging.info(f"Preparando intento {attempt}/{max_attempts}. Restaurando workspace a estado base...")
             subprocess.run(["git", "reset", "--hard"], check=True, capture_output=True, timeout=120)
             subprocess.run(["git", "clean", "-fd"], check=True, capture_output=True, timeout=120)
-            materialize_cached_files(generated_files, feedback_dict, context_manager)
 
             logging.info(f"Ejecutando ciclo de desarrollo (Intento {attempt}/{max_attempts})...")
 
@@ -789,6 +788,9 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                 all_attempt_results.append(current_attempt_gates)
                 attempt += 1
                 continue
+
+            # D5-B: Materialize valid generated files from cache ONLY AFTER successful design validation against the clean baseline
+            materialize_cached_files(generated_files, feedback_dict, context_manager)
 
             code_actions = [a for a in design.get('actions', []) if a['operation'].upper() in ["CREATE", "MODIFY"] and a['file_type'] != 'test']
             test_actions = [a for a in design.get('actions', []) if a['operation'].upper() in ["CREATE", "MODIFY"] and a['file_type'] == 'test' and not a['filepath'].endswith("__init__.py")]
@@ -932,15 +934,26 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                         feedback_dict[path] = log
 
                 if test_passed:
-                    logging.info(f"Ejecutando suite de regresión completa de {gate_plan.test_framework}...")
-                    if gate_plan.test_framework == "unittest":
-                        regression_result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-v"], capture_output=True, text=True, timeout=600)
+                    if not repo_context.test_index and not canonical_contract.protected_tests:
+                        # D5-A: Greenfield regression semantics
+                        logging.info("Regresión baseline omitida: el repositorio inicial no contiene tests.")
+                        regression_log = "Regresión baseline omitida: el repositorio inicial no contiene tests.\n"
+                        test_log += f"\n--- REGRESIÓN COMPLETA ---\n{regression_log}"
                     else:
-                        regression_result = subprocess.run([sys.executable, "-m", "pytest", "-v"], capture_output=True, text=True, timeout=600)
-                    
-                    test_passed = regression_result.returncode == 0
-                    regression_log = regression_result.stdout + regression_result.stderr
-                    test_log += f"\n--- REGRESIÓN COMPLETA ---\n{regression_log}"
+                        logging.info(f"Ejecutando suite de regresión completa de {gate_plan.test_framework}...")
+                        if gate_plan.test_framework == "unittest":
+                            regression_result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-v"], capture_output=True, text=True, timeout=600)
+                        else:
+                            regression_result = subprocess.run([sys.executable, "-m", "pytest", "-v"], capture_output=True, text=True, timeout=600)
+
+                        test_passed = regression_result.returncode == 0
+                        regression_log = regression_result.stdout + regression_result.stderr
+
+                        # D5-A: Fail closed if baseline tests were expected but unittest ran 0 tests
+                        if gate_plan.test_framework == "unittest" and "Ran 0 tests" in regression_log:
+                            test_passed = False
+
+                        test_log += f"\n--- REGRESIÓN COMPLETA ---\n{regression_log}"
 
                 current_attempt_gates.append(GateResult(attempt=attempt, name="tests", executed=True, passed=test_passed, output=test_log))
                 if not test_passed:

@@ -1040,3 +1040,339 @@ def test_D4_C7_repository_framework_conflict_not_greenfield():
         assert False, "Expected PreflightError to be raised due to framework conflict, but it silently fell back."
     except PreflightError as e:
         assert "no existe un framework permitido" in str(e)
+
+from orchestrator_core.schemas import RepositoryContext, AcceptanceContract, PythonProjectConfiguration, PythonQualityPolicy
+
+def apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan):
+    child_issue = MagicMock()
+    ready_label = MagicMock()
+    ready_label.name = "ai:ready-to-code"
+    child_issue.labels = [ready_label]
+    child_issue.body = "PO_PARENT_EPIC=2\nPO_CHILD_INDEX=1\nFINGERPRINT=0123456789abcdef"
+    parent_epic = MagicMock()
+    deployed_label = MagicMock()
+    deployed_label.name = "gate:deployed"
+    parent_epic.labels = [deployed_label]
+
+    def mock_get_issue(number):
+        if number == 1: return child_issue
+        if number == 2: return parent_epic
+        raise Exception("Not found")
+    mock_runtime.repo.get_issue.side_effect = mock_get_issue
+
+    class MockRCM:
+        def build_repository_context(self, *args, **kwargs):
+            return repo_context
+        def get_file_content(self, *args, **kwargs):
+            return ""
+
+    reviewer_mock = MagicMock(approved=True, design_conflict=False)
+    reviewer_mock.model_dump.return_value = {"approved": True, "design_conflict": False}
+
+    auditor_mock = MagicMock(approved=True)
+    auditor_mock.model_dump.return_value = {"approved": True}
+
+    patches = [
+        patch("orchestrator.RepositoryContextManager", return_value=MockRCM()),
+        patch("orchestrator.base_preflight", return_value=[]),
+        patch("orchestrator.fetch_issue", return_value=("T", "D")),
+        patch("orchestrator.agent_generate_acceptance_contract", return_value=contract),
+        patch("orchestrator.validate_contract_consistency", return_value=(True, [])),
+        patch("orchestrator._derive_gate_plan", return_value=gate_plan),
+        patch("orchestrator.validate_testing_policy_compatibility", return_value=[]),
+        patch("orchestrator.tool_preflight", return_value=[]),
+        patch("orchestrator.validate_contract_capabilities", return_value=(True, [])),
+        patch("orchestrator.validate_relevant_context_files", return_value=[]),
+        patch("orchestrator.agent_analyze_and_design", return_value=design),
+        patch("orchestrator.validate_generated_manifest", return_value=(True, "")),
+        patch("orchestrator.validate_final_state", return_value=(True, "")),
+        patch("orchestrator.agent_code_reviewer", return_value=reviewer_mock),
+        patch("orchestrator.agent_security_audit", return_value=auditor_mock),
+        patch("orchestrator.agent_update_architecture_doc", return_value="docs/ARCHITECTURE.md"),
+        patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")),
+        patch("orchestrator.run_mypy", return_value=(True, "OK")),
+        patch("orchestrator.build_mypy_scope", return_value=[]),
+        patch("orchestrator.estimate_repository_context_tokens", return_value=0),
+        patch("os.makedirs"),
+        patch("builtins.open"),
+        patch("orchestrator.run_local_tests", return_value=(True, "OK")),
+        patch("orchestrator.agent_generate_tests", return_value="# test code"),
+        patch("orchestrator.agent_implement_code", return_value="# src code"),
+        patch("orchestrator.validate_code_quality", return_value=(True, "OK")),
+        patch("orchestrator.validate_contractual_ast", return_value=[])
+    ]
+    return patches
+
+def test_D5_A1_greenfield_repository_tests_gate_pass(mock_runtime, tmp_path):
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "test_x.py", "file_type": "test", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=True, test_framework="pytest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+    with patch("orchestrator.materialize_cached_files"), \
+         patch("orchestrator.validate_design", return_value=(True, [])):
+        for p in patches: p.start()
+
+        import orchestrator
+        with patch("subprocess.run") as mock_subprocess_run:
+            mock_subprocess_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+            for call in mock_subprocess_run.call_args_list:
+                args = call[0][0]
+                assert "pytest" not in args
+                assert "unittest" not in args
+
+        for p in patches: p.stop()
+
+def test_D5_A2_baseline_tests_exist_runner_fails(mock_runtime, tmp_path):
+    from orchestrator_core.schemas import PythonFileSummary
+    repo_context = RepositoryContext(
+        source_index={}, test_index={"test_x.py": PythonFileSummary(filepath="test_x.py", module_name="test_x", imports=[], exports=[], docstring_summary="", referenced_symbols=[], file_hash="", estimated_tokens=0, classes=[], functions=[], signatures={}, complexity=0, is_test=True)},
+        relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "test_x.py", "file_type": "test", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=True, test_framework="pytest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+    with patch("orchestrator.materialize_cached_files"), patch("orchestrator.validate_design", return_value=(True, [])):
+        for p in patches: p.start()
+
+        import orchestrator
+        with patch("subprocess.run") as mock_subprocess_run:
+            def side_effect(cmd, **kwargs):
+                if "pytest" in cmd:
+                    return MagicMock(returncode=1, stdout="", stderr="Fail")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            mock_subprocess_run.side_effect = side_effect
+
+            with patch("orchestrator.agent_generate_tests") as mock_gen_tests:
+                orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+                pytest_calls = [call for call in mock_subprocess_run.call_args_list if "pytest" in call[0][0]]
+                assert len(pytest_calls) > 1
+
+        for p in patches: p.stop()
+
+def test_D5_A3_baseline_tests_expected_but_zero_executed(mock_runtime, tmp_path):
+    from orchestrator_core.schemas import PythonFileSummary
+    repo_context = RepositoryContext(
+        source_index={}, test_index={"test_x.py": PythonFileSummary(filepath="test_x.py", module_name="test_x", imports=[], exports=[], docstring_summary="", referenced_symbols=[], file_hash="", estimated_tokens=0, classes=[], functions=[], signatures={}, complexity=0, is_test=True)},
+        relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "test_x.py", "file_type": "test", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=True, test_framework="unittest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+    with patch("orchestrator.materialize_cached_files"), patch("orchestrator.validate_design", return_value=(True, [])):
+        for p in patches: p.start()
+
+        import orchestrator
+        with patch("subprocess.run") as mock_subprocess_run:
+            def side_effect(cmd, **kwargs):
+                if "unittest" in cmd:
+                    return MagicMock(returncode=0, stdout="Ran 0 tests", stderr="")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            mock_subprocess_run.side_effect = side_effect
+
+            with patch("orchestrator.agent_generate_tests") as mock_gen_tests:
+                orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+                unittest_calls = [call for call in mock_subprocess_run.call_args_list if "unittest" in call[0][0]]
+                assert len(unittest_calls) > 1
+
+        for p in patches: p.stop()
+
+def test_D5_A4_generated_test_fails_in_greenfield(mock_runtime, tmp_path):
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "test_x.py", "file_type": "test", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=True, test_framework="pytest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+    with patch("orchestrator.materialize_cached_files"), patch("orchestrator.validate_design", return_value=(True, [])):
+        for p in patches: p.start()
+
+        import orchestrator
+        with patch("orchestrator.run_local_tests", return_value=(False, "Generated test failed")):
+            with patch("orchestrator.agent_generate_tests") as mock_gen_tests:
+                with patch("subprocess.run") as mock_subprocess_run:
+                    orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+                    assert mock_gen_tests.call_count > 1
+                    for call in mock_subprocess_run.call_args_list:
+                        args = call[0][0]
+                        assert "pytest" not in args
+        for p in patches: p.stop()
+
+def test_D5_A5_existing_pytest_behavior_preserved(mock_runtime, tmp_path):
+    from orchestrator_core.schemas import PythonFileSummary
+    repo_context = RepositoryContext(
+        source_index={}, test_index={"test_x.py": PythonFileSummary(filepath="test_x.py", module_name="test_x", imports=[], exports=[], docstring_summary="", referenced_symbols=[], file_hash="", estimated_tokens=0, classes=[], functions=[], signatures={}, complexity=0, is_test=True)},
+        relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "test_x.py", "file_type": "test", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=True, test_framework="pytest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+    with patch("orchestrator.materialize_cached_files"), patch("orchestrator.validate_design", return_value=(True, [])):
+        for p in patches: p.start()
+        import orchestrator
+        with patch("subprocess.run") as mock_subprocess_run:
+            def side_effect(cmd, **kwargs):
+                if "pytest" in cmd:
+                    return MagicMock(returncode=0, stdout="Ran 1 test", stderr="")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            mock_subprocess_run.side_effect = side_effect
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+            assert any("pytest" in call[0][0] for call in mock_subprocess_run.call_args_list)
+        for p in patches: p.stop()
+
+def test_D5_A6_existing_unittest_behavior_preserved(mock_runtime, tmp_path):
+    from orchestrator_core.schemas import PythonFileSummary
+    repo_context = RepositoryContext(
+        source_index={}, test_index={"test_x.py": PythonFileSummary(filepath="test_x.py", module_name="test_x", imports=[], exports=[], docstring_summary="", referenced_symbols=[], file_hash="", estimated_tokens=0, classes=[], functions=[], signatures={}, complexity=0, is_test=True)},
+        relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "test_x.py", "file_type": "test", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=True, test_framework="unittest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+    with patch("orchestrator.materialize_cached_files"), patch("orchestrator.validate_design", return_value=(True, [])):
+        for p in patches: p.start()
+        import orchestrator
+        with patch("subprocess.run") as mock_subprocess_run:
+            def side_effect(cmd, **kwargs):
+                if "unittest" in cmd:
+                    return MagicMock(returncode=0, stdout="Ran 1 test", stderr="")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            mock_subprocess_run.side_effect = side_effect
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+            assert any("unittest" in call[0][0] for call in mock_subprocess_run.call_args_list)
+        for p in patches: p.stop()
+
+def test_D5_B1_validate_design_sees_baseline_before_cache(mock_runtime, tmp_path):
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(required_new_files=["new_file.py"], protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "new_file.py", "file_type": "source", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=False, test_framework="pytest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+
+    order = []
+
+    def mock_validate_design(*args, **kwargs):
+        order.append("validate_design")
+        return (True, [])
+
+    def mock_materialize_cached_files(*args, **kwargs):
+        order.append("materialize")
+
+    with patch("orchestrator.validate_design", side_effect=mock_validate_design), \
+         patch("orchestrator.materialize_cached_files", side_effect=mock_materialize_cached_files):
+        for p in patches: p.start()
+        import orchestrator
+        orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+        for p in patches: p.stop()
+
+    assert order == ["validate_design", "materialize"]
+
+def test_D5_B2_cache_materialized_after_validation(mock_runtime, tmp_path):
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, relevant_source_files={}, relevant_test_files={},
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration()
+    )
+    contract = AcceptanceContract(protected_tests={})
+    design = {"actions": [{"operation": "CREATE", "filepath": "new_file.py", "file_type": "source", "description": ""}]}
+    gate_plan = MagicMock(run_mypy=False, run_tests=False, test_framework="pytest", run_static_analysis=False)
+
+    patches = apply_d5_patches(mock_runtime, repo_context, contract, design, gate_plan)
+
+    with patch("orchestrator.validate_design", return_value=(True, [])), \
+         patch("orchestrator.materialize_cached_files") as mock_materialize:
+
+        for p in patches: p.start()
+        import orchestrator
+
+        with patch("orchestrator.validate_generated_manifest", side_effect=[(False, "fail"), (True, ""), (True, ""), (True, "")]), \
+             patch("orchestrator.agent_implement_code", return_value="CODE"):
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+            assert mock_materialize.call_count >= 2
+            args, kwargs = mock_materialize.call_args_list[1]
+            generated_files = args[0]
+            assert "new_file.py" in generated_files
+            assert generated_files["new_file.py"] == "CODE"
+
+        for p in patches: p.stop()
+
+def test_D5_B3_genuine_conflict_fails(mock_runtime, tmp_path):
+    from orchestrator_core.contract_validation import validate_design
+    from orchestrator_core.schemas import AcceptanceContract
+
+    design = {
+        "actions": [
+            {"operation": "CREATE", "filepath": "existing.py", "file_type": "source", "description": ""}
+        ]
+    }
+    contract = AcceptanceContract(required_new_files=["existing.py"])
+
+    import os
+    file_path = tmp_path / "existing.py"
+    file_path.write_text("# baseline")
+
+    with patch("orchestrator_core.contract_validation.resolve_safe_path", return_value=str(file_path)):
+        valid, errors = validate_design(design, contract)
+        assert not valid
+        assert any("CREATE" in e for e in errors)
+
+    file_path.unlink()
+
+def test_D5_B4_create_changed_to_modify_fails_contract(mock_runtime, tmp_path):
+    from orchestrator_core.contract_validation import validate_design
+    from orchestrator_core.schemas import AcceptanceContract
+
+    design = {
+        "actions": [
+            {"operation": "MODIFY", "filepath": "new.py", "file_type": "source", "description": ""}
+        ]
+    }
+    contract = AcceptanceContract(required_new_files=["new.py"])
+    valid, errors = validate_design(design, contract)
+    assert not valid
+    assert any("El diseño no crea archivos requeridos por el contrato" in e for e in errors)
+
+def test_D5_B5_retry_cache_semantics_preserved(mock_runtime, tmp_path):
+    from orchestrator import materialize_cached_files
+
+    generated_files = {"good.py": "GOOD", "bad.py": "BAD"}
+    feedback_dict = {"bad.py": "Error"}
+
+    context_manager = MagicMock()
+
+    with patch("os.makedirs"), patch("builtins.open") as mock_open:
+        materialize_cached_files(generated_files, feedback_dict, context_manager)
+
+        written_files = []
+        for call in mock_open.call_args_list:
+            written_files.append(call[0][0])
+
+        assert any("good.py" in f for f in written_files)
+        assert not any("bad.py" in f for f in written_files)
