@@ -543,6 +543,153 @@ def transition_issue_status(issue_id: int, runtime: RuntimeClients) -> None:
         runtime.repo.create_label("status:in-progress", "fef2c0")
     issue_to_update.add_to_labels("status:in-progress")
 
+def generate_validated_acceptance_contract(
+    title: str,
+    desc: str,
+    repo_context: 'RepositoryContext',
+    runtime: 'RuntimeClients',
+    context_budget: 'ContextBudget',
+    context_manager: 'RepositoryContextManager',
+    gate_recorder: 'callable | None' = None
+) -> tuple['AcceptanceContract', 'QualityGatePlan']:
+    """
+    Extrae la Fase 1 de generación de contrato del Orchestrator.
+    Genera candidatos con un máximo de 3 intentos ante rechazos semánticos,
+    de capacidades o de consistencia, preservando el orden de calidad del D7.
+    Si tiene éxito, muta el repo_context cargando los archivos relevantes y
+    retorna el contrato validado y el gate_plan.
+    """
+    from orchestrator_core.exceptions import (
+        CandidateSchemaError, SemanticFidelityError, ContractConsistencyError,
+        ContractPreflightError, EnvironmentPreflightError, ContractCapabilityError,
+        ContractGenerationExhaustedError
+    )
+    import collections
+    from typing import Callable
+
+    def _record(gate: 'GateResult') -> 'GateResult':
+        if gate_recorder:
+            return gate_recorder(gate)
+        return gate
+
+    attempt_contract = 1
+    max_contract_attempts = 3
+    diagnostics = []
+    prior_contract_feedback = ""
+    Diagnostic = collections.namedtuple('Diagnostic', ['attempt', 'category', 'violation', 'final_phase'])
+    canonical_contract = None
+    gate_plan = None
+
+    while attempt_contract <= max_contract_attempts:
+        try:
+            canonical_contract = agent_generate_acceptance_contract(title, desc, repo_context, runtime, prior_feedback=prior_contract_feedback)
+            logging.info(f"Contrato Canónico generado: {canonical_contract.model_dump_json(indent=2)}")
+            _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=True, output="Contrato generado con éxito."))
+
+            # Gate: Semantic fidelity FIRST (before consistency)
+            try:
+                validate_semantic_fidelity(canonical_contract, title, desc, repo_context)
+            except SemanticFidelityError as sf_e:
+                _record(GateResult(attempt=attempt_contract, name="contract_semantic_fidelity", executed=True, passed=False, output=str(sf_e)))
+                raise
+            _record(GateResult(attempt=attempt_contract, name="contract_semantic_fidelity", executed=True, passed=True, output="Fidelidad semántica verificada."))
+
+            consistent, consistency_errors = validate_contract_consistency(canonical_contract)
+            _record(GateResult(attempt=attempt_contract, name="contract_consistency", executed=True, passed=consistent, output="\n".join(consistency_errors) if consistency_errors else "Contrato consistente."))
+            if not consistent:
+                raise ContractConsistencyError(f"Contrato inconsistente: {consistency_errors}")
+
+            try:
+                gate_plan = _derive_gate_plan(repo_context, canonical_contract)
+            except PreflightError as gp_e:
+                # PreflightError from _derive_gate_plan is contract-caused -> retryable
+                raise ContractPreflightError(str(gp_e)) from gp_e
+
+            policy_errors = validate_testing_policy_compatibility(gate_plan.test_framework, canonical_contract)
+            if policy_errors:
+                raise ContractPreflightError(" | ".join(policy_errors))
+
+            # Tool/environment preflight: non-retryable (environment failure)
+            tool_errors = tool_preflight(gate_plan)
+            _record(GateResult(attempt=attempt_contract, name="tool_preflight", executed=True, passed=not tool_errors, output="\n".join(tool_errors) if tool_errors else "Herramientas de análisis disponibles."))
+            if tool_errors:
+                raise EnvironmentPreflightError(" | ".join(tool_errors))
+
+            contract_capabilities_valid, contract_capabilities_errors = validate_contract_capabilities(canonical_contract, _validator_registry)
+            _record(GateResult(attempt=attempt_contract, name="contract_capabilities_validation", executed=True, passed=contract_capabilities_valid, output="\n".join(contract_capabilities_errors)))
+            if not contract_capabilities_valid:
+                raise ContractCapabilityError("Contrato generado con reglas no soportadas.")
+
+            relevant_context_errors = validate_relevant_context_files(repo_context, canonical_contract)
+            _record(GateResult(attempt=attempt_contract, name="relevant_context_validation", executed=True, passed=not relevant_context_errors, output="\n".join(relevant_context_errors) if relevant_context_errors else "Archivos de contexto relevantes validados."))
+            if relevant_context_errors:
+                raise ContractConsistencyError(" | ".join(relevant_context_errors))
+
+            break # Success!
+
+        except EnvironmentPreflightError:
+            # Tool/environment failure: non-retryable, propagate immediately
+            logging.error(f"Fallo de entorno no recuperable (intento {attempt_contract}): herramientas no disponibles.")
+            _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=False, output="EnvironmentPreflightError: herramientas no disponibles."))
+            raise
+
+        except (CandidateSchemaError, SemanticFidelityError, ContractConsistencyError, ContractCapabilityError, ContractPreflightError) as e:
+            logging.error(f"Fallo en contrato (intento {attempt_contract}): {e}")
+
+            # Assign category and final_phase
+            if isinstance(e, CandidateSchemaError):
+                cat = "CandidateSchemaError"
+                final_phase = "schema"
+            elif isinstance(e, SemanticFidelityError):
+                cat = "SemanticFidelityError"
+                final_phase = "semantic_fidelity"
+            elif isinstance(e, ContractConsistencyError):
+                cat = "ContractConsistencyError"
+                final_phase = "consistency"
+            elif isinstance(e, ContractCapabilityError):
+                cat = "ContractCapabilityError"
+                final_phase = "capability"
+            else:  # ContractPreflightError
+                cat = "ContractPreflightError"
+                final_phase = "gate_plan"
+
+            diagnostics.append(Diagnostic(attempt=attempt_contract, category=cat, violation=str(e), final_phase=final_phase))
+            prior_contract_feedback = str(e)
+
+            if attempt_contract >= max_contract_attempts:
+                raise ContractGenerationExhaustedError("Exhausted contract generation attempts", diagnostics=diagnostics) from e
+            attempt_contract += 1
+        except Exception as e:
+            logging.error(f"Fallo crítico al generar el contrato de aceptación: {e}")
+            _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=False, output=f'{type(e).__name__}: {str(e)}'))
+            raise
+
+    # Cargar el contenido de los relevant_context_files solicitados por contrato respetando ContextBudget
+    _base_tokens = estimate_repository_context_tokens(repo_context, desc, canonical_contract)
+    _remaining_budget = max(0, context_budget.maximum_input_tokens - context_budget.reserved_output_tokens - _base_tokens)
+
+    for f in canonical_contract.relevant_context_files:
+        if f in repo_context.relevant_source_files or f in repo_context.relevant_test_files:
+            continue # Ya cargado
+        try:
+            safe_path = resolve_safe_path(".", f)
+            with open(safe_path, "r", encoding="utf-8") as f_obj:
+                content = f_obj.read()
+                tok_estimate = len(content) // 4
+                if tok_estimate <= _remaining_budget:
+                    if f in repo_context.test_index:
+                        repo_context.relevant_test_files[f] = content
+                    else:
+                        repo_context.relevant_source_files[f] = content
+                    _remaining_budget -= tok_estimate
+                    logging.info(f"Cargado contexto adicional por contrato: {f} ({tok_estimate} tokens)")
+                else:
+                    logging.warning(f"Omitido contexto adicional (fuera de presupuesto): {f}")
+        except Exception as e:
+            logging.warning(f"No se pudo cargar contexto '{f}': {e}")
+
+    return canonical_contract, gate_plan
+
 def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeClients) -> None:
     context_manager = RepositoryContextManager()
     pipeline_passed = False
@@ -588,130 +735,16 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             logging.error(f"Conflictos de arquitectura bloqueantes detectados. El pipeline se detendrá. Conflictos: {blocking_conflicts_str}")
             raise ContractGenerationError("Conflictos de arquitectura bloqueantes detectados.")
 
-        canonical_contract: AcceptanceContract
-        from orchestrator_core.exceptions import (
-            CandidateSchemaError, SemanticFidelityError, ContractConsistencyError,
-            ContractPreflightError, EnvironmentPreflightError, ContractCapabilityError,
-            ContractGenerationExhaustedError
+        canonical_contract, gate_plan = generate_validated_acceptance_contract(
+            title, desc, repo_context, runtime, context_budget, context_manager, gate_recorder=_record
         )
 
-
-        attempt_contract = 1
+        # --- PHASE 2: Iterative Development Attempts ---
         max_contract_attempts = 3
         diagnostics = []
         prior_contract_feedback = ""
         import collections
-        Diagnostic = collections.namedtuple('Diagnostic', ['attempt', 'category', 'violation', 'final_phase'])
-        while attempt_contract <= max_contract_attempts:
-            try:
-                canonical_contract = agent_generate_acceptance_contract(title, desc, repo_context, runtime, prior_feedback=prior_contract_feedback)
-                logging.info(f"Contrato Canónico generado: {canonical_contract.model_dump_json(indent=2)}")
-                _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=True, output="Contrato generado con éxito."))
 
-                # Gate: Semantic fidelity FIRST (before consistency)
-                try:
-                    validate_semantic_fidelity(canonical_contract, title, desc, repo_context)
-                except SemanticFidelityError as sf_e:
-                    _record(GateResult(attempt=attempt_contract, name="contract_semantic_fidelity", executed=True, passed=False, output=str(sf_e)))
-                    raise
-                _record(GateResult(attempt=attempt_contract, name="contract_semantic_fidelity", executed=True, passed=True, output="Fidelidad semántica verificada."))
-
-                consistent, consistency_errors = validate_contract_consistency(canonical_contract)
-                _record(GateResult(attempt=attempt_contract, name="contract_consistency", executed=True, passed=consistent, output="\n".join(consistency_errors) if consistency_errors else "Contrato consistente."))
-                if not consistent:
-                    raise ContractConsistencyError(f"Contrato inconsistente: {consistency_errors}")
-
-                try:
-                    gate_plan = _derive_gate_plan(repo_context, canonical_contract)
-                except PreflightError as gp_e:
-                    # PreflightError from _derive_gate_plan is contract-caused -> retryable
-                    raise ContractPreflightError(str(gp_e)) from gp_e
-
-                policy_errors = validate_testing_policy_compatibility(gate_plan.test_framework, canonical_contract)
-                if policy_errors:
-                    raise ContractPreflightError(" | ".join(policy_errors))
-
-                # Tool/environment preflight: non-retryable (environment failure)
-                tool_errors = tool_preflight(gate_plan)
-                _record(GateResult(attempt=attempt_contract, name="tool_preflight", executed=True, passed=not tool_errors, output="\n".join(tool_errors) if tool_errors else "Herramientas de análisis disponibles."))
-                if tool_errors:
-                    raise EnvironmentPreflightError(" | ".join(tool_errors))
-
-                contract_capabilities_valid, contract_capabilities_errors = validate_contract_capabilities(canonical_contract, _validator_registry)
-                _record(GateResult(attempt=attempt_contract, name="contract_capabilities_validation", executed=True, passed=contract_capabilities_valid, output="\n".join(contract_capabilities_errors)))
-                if not contract_capabilities_valid:
-                    raise ContractCapabilityError("Contrato generado con reglas no soportadas.")
-
-                relevant_context_errors = validate_relevant_context_files(repo_context, canonical_contract)
-                _record(GateResult(attempt=attempt_contract, name="relevant_context_validation", executed=True, passed=not relevant_context_errors, output="\n".join(relevant_context_errors) if relevant_context_errors else "Archivos de contexto relevantes validados."))
-                if relevant_context_errors:
-                    raise ContractConsistencyError(" | ".join(relevant_context_errors))
-
-                break # Success!
-
-            except EnvironmentPreflightError:
-                # Tool/environment failure: non-retryable, propagate immediately
-                logging.error(f"Fallo de entorno no recuperable (intento {attempt_contract}): herramientas no disponibles.")
-                _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=False, output="EnvironmentPreflightError: herramientas no disponibles."))
-                raise
-
-            except (CandidateSchemaError, SemanticFidelityError, ContractConsistencyError, ContractCapabilityError, ContractPreflightError) as e:
-                logging.error(f"Fallo en contrato (intento {attempt_contract}): {e}")
-
-                # Assign category and final_phase
-                if isinstance(e, CandidateSchemaError):
-                    cat = "CandidateSchemaError"
-                    final_phase = "schema"
-                elif isinstance(e, SemanticFidelityError):
-                    cat = "SemanticFidelityError"
-                    final_phase = "semantic_fidelity"
-                elif isinstance(e, ContractConsistencyError):
-                    cat = "ContractConsistencyError"
-                    final_phase = "consistency"
-                elif isinstance(e, ContractCapabilityError):
-                    cat = "ContractCapabilityError"
-                    final_phase = "capability"
-                else:  # ContractPreflightError
-                    cat = "ContractPreflightError"
-                    final_phase = "gate_plan"
-
-                diagnostics.append(Diagnostic(attempt=attempt_contract, category=cat, violation=str(e), final_phase=final_phase))
-                prior_contract_feedback = str(e)
-
-                if attempt_contract >= max_contract_attempts:
-                    raise ContractGenerationExhaustedError("Exhausted contract generation attempts", diagnostics=diagnostics) from e
-                attempt_contract += 1
-            except Exception as e:
-                logging.error(f"Fallo crítico al generar el contrato de aceptación: {e}")
-                _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=False, output=f'{type(e).__name__}: {str(e)}'))
-                raise
-
-        # Cargar el contenido de los relevant_context_files solicitados por contrato respetando ContextBudget
-        _base_tokens = estimate_repository_context_tokens(repo_context, desc, canonical_contract)
-        _remaining_budget = max(0, context_budget.maximum_input_tokens - context_budget.reserved_output_tokens - _base_tokens)
-
-        for f in canonical_contract.relevant_context_files:
-            if f in repo_context.relevant_source_files or f in repo_context.relevant_test_files:
-                continue # Ya cargado
-            try:
-                safe_path = resolve_safe_path(".", f)
-                with open(safe_path, "r", encoding="utf-8") as f_obj:
-                    content = f_obj.read()
-                    tok_estimate = len(content) // 4
-                    if tok_estimate <= _remaining_budget:
-                        if f in repo_context.test_index:
-                            repo_context.relevant_test_files[f] = content
-                        else:
-                            repo_context.relevant_source_files[f] = content
-                        _remaining_budget -= tok_estimate
-                        logging.info(f"Cargado contexto adicional por contrato: {f} ({tok_estimate} tokens)")
-                    else:
-                        logging.warning(f"Omitido contexto adicional (fuera de presupuesto): {f}")
-            except Exception as e:
-                logging.warning(f"No se pudo cargar contexto '{f}': {e}")
-
-
-        # --- PHASE 2: Iterative Development Attempts ---
 
         class ContextUsage:
             def __init__(self, token_limit: int):

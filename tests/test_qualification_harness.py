@@ -276,3 +276,103 @@ def test_main_exit_code_semantics(tmp_path):
                 {"HARNESS_EXECUTION": "PASS", "SCENARIO_VERDICT": "PASS"}
             ]
             assert main(["--mode", "contract", "--scenario", "q1", "--repeat", "3"]) == 0
+
+from unittest.mock import patch, MagicMock
+
+@patch('pathlib.Path.write_text')
+@patch('pathlib.Path.mkdir')
+@patch('qualification.run_live_qualification.QualificationHarness.check_invariants')
+@patch('orchestrator.estimate_repository_context_tokens', return_value=100)
+@patch('orchestrator.tool_preflight', return_value=[])
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_q1_invalid_then_valid_exactly_2_generations(mock_generate, mock_tp, mock_erct, mock_ci, mock_mkdir, mock_wt):
+    from qualification.run_live_qualification import QualificationHarness
+    from orchestrator_core.schemas import AcceptanceContract
+
+    contract1 = AcceptanceContract()
+
+    contract2 = AcceptanceContract(
+        required_tests={"tests/test_feature.py": ["test_feature_works"]}
+    )
+
+    mock_generate.side_effect = [contract1, contract2]
+
+    harness = QualificationHarness("contract", "q1")
+    summary = {"RUN": 1}
+    from pathlib import Path
+    harness.execute_mode(Path("."), MagicMock(), "Automated tests cover the behavior.", "Automated tests cover the behavior.", summary)
+
+    assert mock_generate.call_count == 2
+    assert summary["CONTRACT_GENERATION"] == "PASS"
+
+@patch('pathlib.Path.write_text')
+@patch('pathlib.Path.mkdir')
+@patch('orchestrator.tool_preflight', return_value=[])
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_q1_three_invalid_exhaustion_exactly_3_generations(mock_generate, mock_tp, mock_mkdir, mock_wt):
+    from qualification.run_live_qualification import QualificationHarness
+    from orchestrator_core.schemas import AcceptanceContract
+
+    contract_invalid = AcceptanceContract()
+
+    mock_generate.side_effect = [contract_invalid, contract_invalid, contract_invalid]
+
+    harness = QualificationHarness("contract", "q1")
+    summary = {"RUN": 1}
+    from pathlib import Path
+    harness.execute_mode(Path("."), MagicMock(), "Automated tests cover the behavior.", "Automated tests cover the behavior.", summary)
+
+    assert mock_generate.call_count == 3
+    assert summary["CONTRACT_GENERATION"].startswith("FAIL (ContractGenerationExhaustedError")
+
+@patch('pathlib.Path.write_text')
+@patch('pathlib.Path.mkdir')
+@patch('qualification.run_live_qualification.QualificationHarness.check_invariants')
+@patch('orchestrator.estimate_repository_context_tokens', return_value=100)
+@patch('orchestrator.tool_preflight', return_value=[])
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_q2_governance_invalid_then_valid_exactly_2_generations(mock_generate, mock_tp, mock_erct, mock_ci, mock_mkdir, mock_wt):
+    from qualification.run_live_qualification import QualificationHarness
+    from orchestrator_core.schemas import AcceptanceContract, PreservedBehavior
+
+    contract_invalid = AcceptanceContract(
+        preserved_behaviors=[PreservedBehavior(description="foo", affected_files=[], validation_method="required_test", protected_tests=[])],
+        required_tests={"tests/test_feature.py": ["test_feature_works"]}
+    )
+
+    contract_valid = AcceptanceContract(
+        preserved_behaviors=[PreservedBehavior(description="foo", affected_files=[], validation_method="required_test", protected_tests=["test_feature_works"])],
+        required_tests={"tests/test_feature.py": ["test_feature_works"]}
+    )
+
+    mock_generate.side_effect = [contract_invalid, contract_valid]
+
+    harness = QualificationHarness("contract", "q2")
+    summary = {"RUN": 1}
+    from pathlib import Path
+    harness.execute_mode(Path("."), MagicMock(), "Automated tests cover the behavior.", "Automated tests cover the behavior.", summary)
+
+    assert mock_generate.call_count == 2
+    assert summary["CONTRACT_GENERATION"] == "PASS"
+
+@patch('pathlib.Path.write_text')
+@patch('pathlib.Path.mkdir')
+@patch('orchestrator.tool_preflight', return_value=["Error infra"])
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_infrastructure_failure_no_retry_exactly_1_generation(mock_generate, mock_tp, mock_mkdir, mock_wt):
+    from qualification.run_live_qualification import QualificationHarness
+    from orchestrator_core.schemas import AcceptanceContract
+
+    contract = AcceptanceContract(
+        required_tests={"tests/test_feature.py": ["test_feature_works"]}
+    )
+
+    mock_generate.return_value = contract
+
+    harness = QualificationHarness("contract", "q1")
+    summary = {"RUN": 1}
+    from pathlib import Path
+    harness.execute_mode(Path("."), MagicMock(), "Automated tests cover the behavior.", "Automated tests cover the behavior.", summary)
+
+    assert mock_generate.call_count == 1
+    assert summary["CONTRACT_GENERATION"].startswith("FAIL (PROVIDER/INFRASTRUCTURE:")

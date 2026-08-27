@@ -2844,3 +2844,189 @@ def test_d7_required_quality_tools_with_repo_provenance_accepted():
 
     # Must NOT raise - mypy is in detected_quality_tools
     validate_semantic_fidelity(contract, title, desc, repo_context)
+
+from unittest.mock import patch, MagicMock
+
+@patch('orchestrator.subprocess.run')
+@patch('orchestrator.validate_issue_eligibility')
+@patch('orchestrator.agent_analyze_pipeline_failure')
+@patch('orchestrator.RepositoryContextManager')
+@patch('orchestrator.agent_analyze_and_design')
+@patch('orchestrator.generate_validated_acceptance_contract')
+@patch('orchestrator.write_local_log')
+def test_d7_run_pipeline_uses_extracted_contract_function(mock_log, mock_generate, mock_design, mock_rcm, mock_po, mock_eligibility, mock_run):
+    import orchestrator
+    import pytest
+    from orchestrator_core.schemas import AcceptanceContract, QualityGatePlan
+
+    mock_generate.return_value = (AcceptanceContract(), QualityGatePlan(test_framework="pytest", run_tests=False, run_mypy=False, run_ruff=False, run_vulture=False))
+    mock_run.return_value.returncode = 0
+
+    class SentinelError(Exception):
+        pass
+
+    mock_design.side_effect = SentinelError("Stop at design")
+
+    # Mock repo context so architecture validation passes
+    mock_ctx = MagicMock()
+    mock_ctx.architecture_conflicts = []
+    mock_rcm.return_value.build_repository_context.return_value = mock_ctx
+
+    with pytest.raises(SentinelError):
+        orchestrator.run_pipeline(1, "run-1", ".logs", MagicMock())
+
+    mock_generate.assert_called_once()
+
+
+@patch('orchestrator.validate_semantic_fidelity')
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_d7_extracted_function_max_3_attempts_exhaustion(mock_agent, mock_vsf):
+    from orchestrator import generate_validated_acceptance_contract
+    from orchestrator_core.schemas import RepositoryContext, PythonQualityPolicy, PythonProjectConfiguration
+    from orchestrator_core.exceptions import ContractGenerationExhaustedError, SemanticFidelityError
+
+    mock_vsf.side_effect = SemanticFidelityError("Fake error")
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    import pytest
+    with pytest.raises(ContractGenerationExhaustedError):
+        generate_validated_acceptance_contract(
+            "title", "desc", repo_context, MagicMock(), MagicMock(), MagicMock()
+        )
+    assert mock_agent.call_count == 3
+
+
+@patch('orchestrator.estimate_repository_context_tokens', return_value=100)
+@patch('orchestrator.validate_relevant_context_files', return_value=[])
+@patch('orchestrator.validate_contract_capabilities', return_value=(True, []))
+@patch('orchestrator.tool_preflight', return_value=[])
+@patch('orchestrator.validate_testing_policy_compatibility', return_value=[])
+@patch('orchestrator._derive_gate_plan')
+@patch('orchestrator.validate_contract_consistency', return_value=(True, []))
+@patch('orchestrator.validate_semantic_fidelity')
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_d7_extracted_function_retry_on_semantic_fidelity_then_success(mock_agent, mock_vsf, mock_vcc, mock_dgp, mock_vtpc, mock_tp, mock_vcap, mock_vrcf, mock_erct):
+    from orchestrator import generate_validated_acceptance_contract
+    from orchestrator_core.schemas import RepositoryContext, PythonQualityPolicy, PythonProjectConfiguration, AcceptanceContract, QualityGatePlan
+    from orchestrator_core.exceptions import SemanticFidelityError
+
+    mock_agent.return_value = AcceptanceContract()
+
+    sf_calls = 0
+    def fake_sf(*args, **kwargs):
+        nonlocal sf_calls
+        sf_calls += 1
+        if sf_calls == 1:
+            raise SemanticFidelityError("First fail")
+
+    mock_vsf.side_effect = fake_sf
+    mock_dgp.return_value = QualityGatePlan(test_framework="pytest", run_tests=False, run_mypy=False, run_ruff=False, run_vulture=False)
+
+    mock_budget = MagicMock()
+    mock_budget.maximum_input_tokens = 1000
+    mock_budget.reserved_output_tokens = 100
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    contract, gate = generate_validated_acceptance_contract(
+        "title", "desc", repo_context, MagicMock(), mock_budget, MagicMock()
+    )
+
+    assert mock_agent.call_count == 2
+    assert sf_calls == 2
+    assert contract is not None
+    assert gate is not None
+
+
+@patch('orchestrator.tool_preflight', return_value=["Error de tool"])
+@patch('orchestrator.validate_testing_policy_compatibility', return_value=[])
+@patch('orchestrator._derive_gate_plan')
+@patch('orchestrator.validate_contract_consistency', return_value=(True, []))
+@patch('orchestrator.validate_semantic_fidelity')
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_d7_extracted_function_environment_error_no_retry(mock_agent, mock_vsf, mock_vcc, mock_dgp, mock_vtpc, mock_tp):
+    from orchestrator import generate_validated_acceptance_contract
+    from orchestrator_core.schemas import RepositoryContext, PythonQualityPolicy, PythonProjectConfiguration, AcceptanceContract, QualityGatePlan
+    from orchestrator_core.exceptions import EnvironmentPreflightError
+
+    mock_agent.return_value = AcceptanceContract()
+    mock_dgp.return_value = QualityGatePlan(test_framework="pytest", run_tests=False, run_mypy=False, run_ruff=False, run_vulture=False)
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    import pytest
+    with pytest.raises(EnvironmentPreflightError):
+        generate_validated_acceptance_contract(
+            "title", "desc", repo_context, MagicMock(), MagicMock(), MagicMock()
+        )
+    assert mock_agent.call_count == 1
+
+@patch('pathlib.Path.write_text')
+@patch('pathlib.Path.mkdir')
+@patch('orchestrator.agent_analyze_and_design')
+@patch('orchestrator.RepositoryContextManager')
+@patch('qualification.run_live_qualification.QualificationHarness.check_invariants')
+@patch('qualification.run_live_qualification.generate_validated_acceptance_contract')
+def test_d7_contract_mode_does_not_call_design(mock_generate, mock_ci, mock_rcm, mock_design, mock_mkdir, mock_wt):
+    from qualification.run_live_qualification import QualificationHarness
+    from orchestrator_core.schemas import AcceptanceContract, QualityGatePlan
+
+    mock_generate.return_value = (AcceptanceContract(), QualityGatePlan(test_framework="pytest", run_tests=False, run_mypy=False, run_ruff=False, run_vulture=False))
+
+    harness = QualificationHarness("contract", "q1")
+    from pathlib import Path
+    harness.execute_mode(Path("."), MagicMock(), "title", "body", {"RUN": 1})
+
+    mock_design.assert_not_called()
+
+@patch('pathlib.Path.write_text')
+@patch('pathlib.Path.mkdir')
+@patch('orchestrator.agent_implement_code')
+@patch('orchestrator.RepositoryContextManager')
+@patch('qualification.run_live_qualification.QualificationHarness.check_invariants')
+@patch('qualification.run_live_qualification.generate_validated_acceptance_contract')
+def test_d7_contract_mode_does_not_call_implementation(mock_generate, mock_ci, mock_rcm, mock_impl, mock_mkdir, mock_wt):
+    from qualification.run_live_qualification import QualificationHarness
+    from orchestrator_core.schemas import AcceptanceContract, QualityGatePlan
+
+    mock_generate.return_value = (AcceptanceContract(), QualityGatePlan(test_framework="pytest", run_tests=False, run_mypy=False, run_ruff=False, run_vulture=False))
+
+    harness = QualificationHarness("contract", "q1")
+    from pathlib import Path
+    harness.execute_mode(Path("."), MagicMock(), "title", "body", {"RUN": 1})
+
+    mock_impl.assert_not_called()
+
+@patch('pathlib.Path.write_text')
+@patch('pathlib.Path.mkdir')
+@patch('orchestrator_core.failure_analysis_agents.agent_analyze_pipeline_failure')
+@patch('orchestrator.RepositoryContextManager')
+@patch('qualification.run_live_qualification.generate_validated_acceptance_contract')
+def test_d7_contract_mode_does_not_invoke_po(mock_generate, mock_rcm, mock_po, mock_mkdir, mock_wt):
+    from qualification.run_live_qualification import QualificationHarness
+    from orchestrator_core.exceptions import ContractGenerationExhaustedError
+    import collections
+    Diagnostic = collections.namedtuple('Diagnostic', ['attempt', 'category', 'violation', 'final_phase'])
+
+    mock_generate.side_effect = ContractGenerationExhaustedError("Fake error", diagnostics=[])
+
+    harness = QualificationHarness("contract", "q1")
+    from pathlib import Path
+    summary = {"RUN": 1}
+    harness.execute_mode(Path("."), MagicMock(), "title", "body", summary)
+
+    assert summary["CONTRACT_GENERATION"].startswith("FAIL (ContractGenerationExhaustedError")
+    mock_po.assert_not_called()

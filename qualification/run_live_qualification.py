@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from orchestrator_core.runtime import RuntimeClients
 from orchestrator_core.planning_agents import agent_generate_acceptance_contract
 from orchestrator_core.contract_validation import validate_contract_consistency
-from orchestrator import run_pipeline, validate_issue_eligibility, validate_contract_capabilities, _validator_registry
+from orchestrator import run_pipeline, validate_issue_eligibility, validate_contract_capabilities, _validator_registry, generate_validated_acceptance_contract
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s:%(filename)s:%(lineno)d %(message)s")
 
@@ -192,31 +192,46 @@ class QualificationHarness:
         if self.mode == "contract":
             from orchestrator import RepositoryContextManager
             from orchestrator_core.schemas import ContextBudget
+            from orchestrator_core.exceptions import ContractGenerationExhaustedError, EnvironmentPreflightError
             context_budget = ContextBudget()
-            repo_context = RepositoryContextManager(str(repo_path)).build_repository_context(body, context_budget)
+            context_manager = RepositoryContextManager(str(repo_path))
+            repo_context = context_manager.build_repository_context(body, context_budget)
 
             try:
-                contract = agent_generate_acceptance_contract(title, body, repo_context, runtime)
+                contract, gate_plan = generate_validated_acceptance_contract(
+                    title, body, repo_context, runtime, context_budget, context_manager, gate_recorder=None
+                )
                 summary["CONTRACT_GENERATION"] = "PASS"
+                summary["CONTRACT_CONSISTENCY"] = "PASS"
+                summary["CONTRACT_CAPABILITIES"] = "PASS"
+            except ContractGenerationExhaustedError as e:
+                summary["CONTRACT_GENERATION"] = f"FAIL (ContractGenerationExhaustedError: {e})"
+                summary["CONTRACT_CONSISTENCY"] = "FAIL"
+                summary["CONTRACT_CAPABILITIES"] = "FAIL"
+                summary["SCENARIO_VERDICT"] = "FAIL"
+
+                # Preserve diagnostic logs from exhausted exceptions for qualification evidence
+                log_dir = Path(".agent-runs/qualification")
+                log_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_file = log_dir / f"{self.scenario}_{self.mode}_run{summary['RUN']}_{ts}.log"
+                log_data = {
+                    "scenario": self.scenario,
+                    "run": summary["RUN"],
+                    "summary": summary,
+                    "diagnostics": [d._asdict() for d in e.diagnostics] if hasattr(e, 'diagnostics') else []
+                }
+                log_file.write_text(json.dumps(log_data, indent=2), encoding="utf-8")
+                return
+            except EnvironmentPreflightError as e:
+                summary["CONTRACT_GENERATION"] = f"FAIL (PROVIDER/INFRASTRUCTURE: {e})"
+                summary["SCENARIO_VERDICT"] = "FAIL"
+                return
             except Exception as e:
-                summary["CONTRACT_GENERATION"] = "FAIL"
+                summary["CONTRACT_GENERATION"] = f"FAIL ({type(e).__name__}: {e})"
                 summary["HARNESS_EXECUTION"] = f"FAIL ({e})"
                 summary["SCENARIO_VERDICT"] = "FAIL"
                 return
-
-            is_consistent, c_errors = validate_contract_consistency(contract)
-            if is_consistent:
-                summary["CONTRACT_CONSISTENCY"] = "PASS"
-            else:
-                summary["CONTRACT_CONSISTENCY"] = "FAIL"
-                summary["SCENARIO_VERDICT"] = "FAIL"
-
-            cap_valid, cap_errors = validate_contract_capabilities(contract, _validator_registry)
-            if cap_valid:
-                summary["CONTRACT_CAPABILITIES"] = "PASS"
-            else:
-                summary["CONTRACT_CAPABILITIES"] = "FAIL"
-                summary["SCENARIO_VERDICT"] = "FAIL"
 
             self.check_invariants(contract, repo_path, summary, repo_context)
 
@@ -229,8 +244,8 @@ class QualificationHarness:
                 "scenario": self.scenario,
                 "run": summary["RUN"],
                 "summary": summary,
-                "contract_consistency": is_consistent,
-                "contract_capabilities": cap_valid,
+                "contract_consistency": True,
+                "contract_capabilities": True,
                 "contract_json": json.loads(contract.model_dump_json())
             }
             log_file.write_text(json.dumps(log_data, indent=2), encoding="utf-8")
