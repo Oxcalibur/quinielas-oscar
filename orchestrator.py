@@ -618,7 +618,8 @@ def generate_validated_acceptance_contract(
             contract_capabilities_valid, contract_capabilities_errors = validate_contract_capabilities(canonical_contract, _validator_registry)
             _record(GateResult(attempt=attempt_contract, name="contract_capabilities_validation", executed=True, passed=contract_capabilities_valid, output="\n".join(contract_capabilities_errors)))
             if not contract_capabilities_valid:
-                raise ContractCapabilityError("Contrato generado con reglas no soportadas.")
+                error_details = "\n".join(f"- {err}" for err in contract_capabilities_errors)
+                raise ContractCapabilityError(f"Contract capability validation failed:\n{error_details}")
 
             relevant_context_errors = validate_relevant_context_files(repo_context, canonical_contract)
             _record(GateResult(attempt=attempt_contract, name="relevant_context_validation", executed=True, passed=not relevant_context_errors, output="\n".join(relevant_context_errors) if relevant_context_errors else "Archivos de contexto relevantes validados."))

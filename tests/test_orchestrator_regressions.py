@@ -3030,3 +3030,105 @@ def test_d7_contract_mode_does_not_invoke_po(mock_generate, mock_rcm, mock_po, m
 
     assert summary["CONTRACT_GENERATION"].startswith("FAIL (ContractGenerationExhaustedError")
     mock_po.assert_not_called()
+
+@patch('orchestrator.tool_preflight', return_value=[])
+@patch('orchestrator.validate_testing_policy_compatibility', return_value=[])
+@patch('orchestrator._derive_gate_plan')
+@patch('orchestrator.validate_contract_consistency', return_value=(True, []))
+@patch('orchestrator.validate_semantic_fidelity')
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_d7_contract_capability_feedback_propagation(mock_agent, mock_vsf, mock_vcc, mock_dgp, mock_vtpc, mock_tp):
+    from orchestrator import generate_validated_acceptance_contract
+    from orchestrator_core.schemas import RepositoryContext, PythonQualityPolicy, PythonProjectConfiguration, AcceptanceContract, QualityGatePlan, PreservedBehavior
+
+    # Attempt 1: Return an invalid contract (capability rejection)
+    bad_contract = AcceptanceContract()
+    bad_contract.preserved_behaviors = [
+        PreservedBehavior(description="desc", validation_method="required_test", affected_files=[], protected_tests=[])
+    ]
+
+    # Attempt 2: Return a valid contract
+    good_contract = AcceptanceContract()
+    good_contract.preserved_behaviors = [
+        PreservedBehavior(description="desc", validation_method="required_test", affected_files=[], protected_tests=["test_a"])
+    ]
+    good_contract.required_tests = {"a.py": ["test_a"]}
+
+    mock_agent.side_effect = [bad_contract, good_contract]
+    mock_dgp.return_value = QualityGatePlan(test_framework="pytest", run_tests=False, run_mypy=False, run_ruff=False, run_vulture=False)
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    context_budget = MagicMock()
+    context_budget.maximum_input_tokens = 100000
+    context_budget.reserved_output_tokens = 8000
+
+    contract, plan = generate_validated_acceptance_contract(
+        "title", "desc", repo_context, MagicMock(), context_budget, MagicMock()
+    )
+
+    assert mock_agent.call_count == 2
+
+    # Assert prior_feedback contains precise governance violation
+    args, kwargs = mock_agent.call_args_list[1]
+    prior_feedback = kwargs.get("prior_feedback", args[4] if len(args) > 4 else "")
+
+    assert "required_test" in prior_feedback
+    assert "protected_test" in prior_feedback
+
+@patch('orchestrator.tool_preflight', return_value=[])
+@patch('orchestrator.validate_testing_policy_compatibility', return_value=[])
+@patch('orchestrator._derive_gate_plan')
+@patch('orchestrator.validate_contract_consistency', return_value=(True, []))
+@patch('orchestrator.validate_semantic_fidelity')
+@patch('orchestrator.agent_generate_acceptance_contract')
+def test_d7_contract_generation_exhaustion_diagnostics(mock_agent, mock_vsf, mock_vcc, mock_dgp, mock_vtpc, mock_tp):
+    from orchestrator import generate_validated_acceptance_contract
+    from orchestrator_core.schemas import RepositoryContext, PythonQualityPolicy, PythonProjectConfiguration, AcceptanceContract, QualityGatePlan, PreservedBehavior
+    from orchestrator_core.exceptions import ContractGenerationExhaustedError
+    import pytest
+
+    # 3 attempts returning invalid capability contract
+    bad_contract = AcceptanceContract()
+    bad_contract.preserved_behaviors = [
+        PreservedBehavior(description="desc", validation_method="required_test", affected_files=[], protected_tests=[])
+    ]
+
+    mock_agent.side_effect = [bad_contract, bad_contract, bad_contract]
+    mock_dgp.return_value = QualityGatePlan(test_framework="pytest", run_tests=False, run_mypy=False, run_ruff=False, run_vulture=False)
+
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    context_budget = MagicMock()
+    context_budget.maximum_input_tokens = 100000
+    context_budget.reserved_output_tokens = 8000
+
+    with pytest.raises(ContractGenerationExhaustedError) as exc_info:
+        generate_validated_acceptance_contract(
+            "title", "desc", repo_context, MagicMock(), context_budget, MagicMock()
+        )
+
+    assert mock_agent.call_count == 3
+
+    diagnostics = exc_info.value.diagnostics
+    assert len(diagnostics) == 3
+
+    for diag in diagnostics:
+        assert diag.final_phase == "capability"
+        assert "required_test" in diag.violation
+        assert "protected_test" in diag.violation
+
+    # Verify that attempt 2 and 3 got actionable detailed feedback
+    for i in [1, 2]:
+        args, kwargs = mock_agent.call_args_list[i]
+        prior_feedback = kwargs.get("prior_feedback", "")
+        assert "required_test" in prior_feedback
+        assert "protected_test" in prior_feedback
