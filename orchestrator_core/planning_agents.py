@@ -6,7 +6,11 @@ from orchestrator_core.schemas import AcceptanceContract, ProjectDesign, Reposit
 from orchestrator_core.prompt_budget import PreflightError, PromptBudget, ensure_prompt_fits
 from orchestrator_core.runtime import RuntimeClients
 from orchestrator_core.model_config import MODEL_HEAVY
-from orchestrator_core.exceptions import ContractGenerationError
+from orchestrator_core.exceptions import (
+    ContractGenerationError,
+    CandidateSchemaError,
+    InfrastructureGenerationError,
+)
 
 def _build_gemini_json_schema(raw_schema: dict) -> dict:
     import copy
@@ -60,7 +64,7 @@ def _build_gemini_json_schema(raw_schema: dict) -> dict:
     adapt_schema_node(schema, ["$root"])
     return schema
 
-def agent_generate_acceptance_contract(title: str, description: str, repository_context: RepositoryContext, runtime: RuntimeClients) -> AcceptanceContract:
+def agent_generate_acceptance_contract(title: str, description: str, repository_context: RepositoryContext, runtime: RuntimeClients, prior_feedback: str = "") -> AcceptanceContract:
     """
     Generates a structured acceptance contract from the issue description, repository context, and architecture.
     """
@@ -213,15 +217,40 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
         temperature=0.1
     )
 
+    # Append prior validation feedback for retry correction
+    if prior_feedback:
+        prompt = prompt + f"\n\n    FEEDBACK DE INTENTO ANTERIOR (CORRIGE ESTOS ERRORES):\n    {prior_feedback}"
+
     try:
         ensure_prompt_fits(prompt, budget_contract, "Acceptance Contract")
-        response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
-        contract = AcceptanceContract.model_validate_json(response.text)
+        try:
+            response = runtime.ai_client.models.generate_content(model=MODEL_HEAVY, contents=prompt, config=config)
+        except Exception as api_exc:
+            # API/transport/auth/network failure: non-retryable
+            logging.error(f"Error de infraestructura al llamar al modelo: {api_exc}")
+            raise InfrastructureGenerationError(
+                f"Fallo de infraestructura al generar el Contrato de Aceptación: {api_exc}"
+            ) from api_exc
+        try:
+            contract = AcceptanceContract.model_validate_json(response.text)
+        except Exception as val_exc:
+            # JSON/schema validation failure: retryable
+            logging.error(f"Error de validación de esquema del candidato: {val_exc}")
+            raise CandidateSchemaError(
+                f"Fallo de validación del esquema del candidato: {val_exc}"
+            ) from val_exc
         logging.info("Contrato de Aceptación generado con éxito.")
         return contract
+    except (InfrastructureGenerationError, CandidateSchemaError):
+        raise
+    except PreflightError:
+        raise
     except Exception as e:
-        logging.error(f"No se pudo generar o validar el Contrato de Aceptación: {e}")
-        raise ContractGenerationError(f"Fallo crítico al generar el Contrato de Aceptación: {e}") from e
+        # Unexpected Python/runtime failure: non-retryable
+        logging.error(f"Error inesperado al generar el Contrato de Aceptación: {e}")
+        raise InfrastructureGenerationError(
+            f"Error inesperado al generar el Contrato de Aceptación: {e}"
+        ) from e
 
 
 def agent_analyze_and_design(title: str, description: str, contract: AcceptanceContract, repo_context: RepositoryContext, runtime: RuntimeClients, context_manager: "RepositoryContextManager", design_feedback: str = "") -> dict:

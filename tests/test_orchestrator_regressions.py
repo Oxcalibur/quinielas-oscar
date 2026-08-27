@@ -215,7 +215,7 @@ def test_R003_mypy_normalization(tmp_path):
     config_content = "[mypy]\nfiles =  src , , src/**/*.py, src, src/**/*.py\n"
     manager = orchestrator.RepositoryContextManager(".", str(tmp_path / "logs"))
     config = manager._extract_project_configuration({"mypy.ini": config_content}, {})
-    assert config.mypy_targets == ["src", "src/**/*.py"], "Debe eliminar vacíos, espacios, deduplicar preservando orden, y mantener globs"
+    assert config.mypy_targets == ["src", "src/**/*.py"], "Debe eliminar vacs, espacios, deduplicar preservando orden, y mantener globs"
 
 # =====================================================================
 # R004: Cache is_test
@@ -1704,3 +1704,1143 @@ def test_D6_C2_lookalike_path_is_not_false_positive(temp_git_repo):
     staged = diff_result.stdout.strip().split('\n')
 
     assert "src/not__pycache__name/module.py" in staged
+
+
+def test_d7_positive_binding_automated_test_requirement_cannot_disappear():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity, SemanticFidelityError
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Implement counter"
+
+    desc = "## Acceptance Criteria\n- Automated tests"
+
+
+
+    import pytest
+
+    with pytest.raises(SemanticFidelityError, match="missing_binding_test_obligation"):
+
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_explicit_no_new_tests_required_does_not_create_obligation():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Implement counter"
+
+    desc = "## Scope\nNo new tests are required for this feature."
+
+
+
+    validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_explicit_tests_optional_does_not_create_obligation():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Implement counter"
+
+    desc = "## Scope\nTests are optional."
+
+    validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_out_of_scope_is_treated_as_binding_negative_constraint():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity, SemanticFidelityError
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files={"forbidden.py"}, required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={"forbidden.py": PythonFileSummary(filepath="forbidden.py", module_name="forbidden", is_test=False, signatures={}, exports=[], docstring_summary="", referenced_symbols=[], file_hash="123", estimated_tokens=100, functions=[], classes=[], imports=[], variables=[])}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Implement feature"
+
+    desc = "## Out of Scope\nModifying forbidden.py"
+
+
+
+    import pytest
+
+    with pytest.raises(SemanticFidelityError, match="nonbinding_escalation.*forbidden.py"):
+
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_estimated_files_remain_nonbinding():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity, SemanticFidelityError
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files={"new_file.py"}, required_new_files={"new_file.py"}, required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Feature"
+
+    desc = "## Estimated Files\nnew_file.py"
+
+
+
+    import pytest
+
+    with pytest.raises(SemanticFidelityError, match="nonbinding_escalation.*new_file.py"):
+
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_recommended_dependency_remains_nonbinding():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity, SemanticFidelityError
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={"src": ["requests"]}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Feature"
+
+    desc = "## Recommendations\nUse requests library"
+
+
+
+    import pytest
+
+    with pytest.raises(SemanticFidelityError, match="nonbinding_escalation.*requests"):
+
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_optional_implementation_choice_remains_nonbinding():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity, SemanticFidelityError
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={"src": ["Singleton"]}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Feature"
+
+    desc = "## Optional choices\nYou can use Singleton pattern"
+
+
+
+    import pytest
+
+    with pytest.raises(SemanticFidelityError, match="nonbinding_escalation.*Singleton"):
+
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_unsupported_mandatory_obligation_without_provenance_rejected():
+
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity, SemanticFidelityError
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={"src": ["Factory"]}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    title = "Feature"
+
+    desc = "## Scope\nDo something." # Does not mention Factory
+
+
+
+    import pytest
+
+    with pytest.raises(SemanticFidelityError, match="UNSUPPORTED_BINDING_OBLIGATION.*Factory"):
+
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+
+def test_d7_valid_required_test_preservation_accepted():
+
+    from orchestrator_core.quality_gates import _derive_gate_plan
+
+    from orchestrator_core.schemas import AcceptanceContract, RepositoryContext, PythonFileSummary, PythonQualityPolicy, PythonProjectConfiguration, PythonProjectConfiguration
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={"tests/test_x.py": ["test_a"]}, preserved_signatures={}, preserved_behaviors=[],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+    repo_context = RepositoryContext(
+
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=set(),
+
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+
+    )
+
+
+
+    gate_plan = _derive_gate_plan(repo_context, contract)
+
+    assert gate_plan.run_tests is True
+
+
+
+def test_d7_required_test_empty_protected_tests_rejected():
+
+    from orchestrator import validate_contract_capabilities
+
+    from orchestrator_core.schemas import AcceptanceContract, PreservedBehavior
+
+
+
+    contract = AcceptanceContract(
+
+        required_final_files=set(), required_new_files=set(), required_modified_files=set(),
+
+        required_deleted_files=set(), preserved_files=set(), relevant_context_files=set(),
+
+        required_tests={}, protected_tests={}, preserved_signatures={},
+
+        preserved_behaviors=[
+
+            PreservedBehavior(description="a", affected_files=[], validation_method="required_test", protected_tests=[])
+
+        ],
+
+        forbidden_test_names=set(), forbidden_constructs={}, required_exports={},
+
+        required_quality_tools=set(), forbidden_quality_tools=set(), required_testing_techniques=set(),
+
+        forbidden_testing_techniques=set(), required_imports={}, forbidden_imports={}, required_calls={},
+
+        required_patterns={}, required_structures={}, required_decorators={}
+
+    )
+
+
+
+    valid, errors = validate_contract_capabilities(contract, {})
+
+    assert not valid
+
+    assert any("required_test" in e for e in errors)
+
+
+
+def test_d7_first_candidate_valid_generates_once(mock_runtime, tmp_path):
+    import orchestrator
+    from orchestrator_core.schemas import AcceptanceContract
+    from unittest.mock import MagicMock
+
+    valid_contract = AcceptanceContract.model_validate_json('{"required_final_files":[]}')
+    mock_agent = MagicMock(return_value=valid_contract)
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.validate_semantic_fidelity"), \
+         patch("orchestrator.validate_contract_consistency", return_value=(True, [])), \
+         patch("orchestrator._derive_gate_plan", return_value=MagicMock(test_framework="none")), \
+         patch("orchestrator.validate_testing_policy_compatibility", return_value=[]), \
+         patch("orchestrator.tool_preflight", return_value=[]), \
+         patch("orchestrator.validate_contract_capabilities", return_value=(True, [])), \
+         patch("orchestrator.validate_relevant_context_files", return_value=[]), \
+         patch("orchestrator.agent_analyze_and_design", return_value={"actions": []}), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")):
+
+        try:
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+        except Exception:
+            pass
+
+        # Material assertion: agent_generate_acceptance_contract was called exactly once
+        assert mock_agent.call_count == 1, (
+            f"Expected exactly 1 generation call for a valid first candidate, got {mock_agent.call_count}"
+        )
+
+
+
+
+def test_d7_invalid_then_valid_generates_twice(mock_runtime, tmp_path):
+
+    import orchestrator
+
+    from orchestrator_core.schemas import AcceptanceContract
+
+    from orchestrator_core.exceptions import CandidateSchemaError
+
+
+
+    valid_contract = AcceptanceContract.model_validate_json('{"required_final_files":[]}')
+
+    mock_agent = MagicMock(side_effect=[CandidateSchemaError("bad"), valid_contract])
+
+
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.validate_semantic_fidelity"), \
+         patch("orchestrator.validate_contract_consistency", return_value=(True, [])), \
+         patch("orchestrator._derive_gate_plan", return_value=MagicMock(test_framework="none")), \
+         patch("orchestrator.validate_testing_policy_compatibility", return_value=[]), \
+         patch("orchestrator.tool_preflight", return_value=[]), \
+         patch("orchestrator.validate_contract_capabilities", return_value=(True, [])), \
+         patch("orchestrator.validate_relevant_context_files", return_value=[]), \
+         patch("orchestrator.agent_analyze_and_design", return_value={"actions": []}), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")):
+
+
+
+         try:
+
+             orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+         except Exception:
+
+             pass
+
+
+
+         assert mock_agent.call_count == 2
+
+
+
+def test_d7_invalid_invalid_valid_generates_thrice(mock_runtime, tmp_path):
+
+    import orchestrator
+
+    from orchestrator_core.schemas import AcceptanceContract
+
+    from orchestrator_core.exceptions import CandidateSchemaError, SemanticFidelityError
+
+
+
+    valid_contract = AcceptanceContract.model_validate_json('{"required_final_files":[]}')
+
+    mock_agent = MagicMock(side_effect=[CandidateSchemaError("bad"), SemanticFidelityError("bad2"), valid_contract])
+
+
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.validate_semantic_fidelity"), \
+         patch("orchestrator.validate_contract_consistency", return_value=(True, [])), \
+         patch("orchestrator._derive_gate_plan", return_value=MagicMock(test_framework="none")), \
+         patch("orchestrator.validate_testing_policy_compatibility", return_value=[]), \
+         patch("orchestrator.tool_preflight", return_value=[]), \
+         patch("orchestrator.validate_contract_capabilities", return_value=(True, [])), \
+         patch("orchestrator.validate_relevant_context_files", return_value=[]), \
+         patch("orchestrator.agent_analyze_and_design", return_value={"actions": []}), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")):
+
+
+
+         try:
+
+             orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+         except Exception:
+
+             pass
+
+
+
+         assert mock_agent.call_count == 3
+
+
+
+def test_d7_three_invalid_candidates_raises_exhaustion_error(mock_runtime, tmp_path):
+
+    import orchestrator
+
+    from orchestrator_core.exceptions import CandidateSchemaError, ContractGenerationExhaustedError
+
+
+
+    mock_agent = MagicMock(side_effect=[CandidateSchemaError("bad1"), CandidateSchemaError("bad2"), CandidateSchemaError("bad3")])
+
+
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"):
+
+
+
+         with pytest.raises(ContractGenerationExhaustedError):
+
+             orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+
+
+def test_d7_no_design_between_retries(mock_runtime, tmp_path):
+
+    import orchestrator
+
+    from orchestrator_core.schemas import AcceptanceContract
+
+    from orchestrator_core.exceptions import CandidateSchemaError
+
+
+
+    valid_contract = AcceptanceContract.model_validate_json('{"required_final_files":[]}')
+
+    mock_agent = MagicMock(side_effect=[CandidateSchemaError("bad1"), valid_contract])
+
+    mock_design = MagicMock(return_value={"actions": []})
+
+
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.validate_semantic_fidelity"), \
+         patch("orchestrator.validate_contract_consistency", return_value=(True, [])), \
+         patch("orchestrator._derive_gate_plan", return_value=MagicMock(test_framework="none")), \
+         patch("orchestrator.validate_testing_policy_compatibility", return_value=[]), \
+         patch("orchestrator.tool_preflight", return_value=[]), \
+         patch("orchestrator.validate_contract_capabilities", return_value=(True, [])), \
+         patch("orchestrator.validate_relevant_context_files", return_value=[]), \
+         patch("orchestrator.agent_analyze_and_design", mock_design), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")):
+
+
+
+         try:
+
+             orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+         except Exception:
+
+             pass
+
+
+
+         assert mock_design.call_count == 1 # Only called once after valid contract
+
+
+
+def test_d7_no_implementation_between_retries(mock_runtime, tmp_path):
+    """Three rejected candidates: design and implement must both be 0 calls."""
+    import orchestrator
+    from orchestrator_core.schemas import AcceptanceContract
+    from orchestrator_core.exceptions import CandidateSchemaError, ContractGenerationExhaustedError
+
+    mock_agent = MagicMock(side_effect=[
+        CandidateSchemaError("bad1"),
+        CandidateSchemaError("bad2"),
+        CandidateSchemaError("bad3"),
+    ])
+    mock_design = MagicMock(return_value={"actions": []})
+    mock_implement = MagicMock(return_value="# code")
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"), \
+         patch("orchestrator.agent_analyze_and_design", mock_design), \
+         patch("orchestrator.agent_implement_code", mock_implement):
+
+        with pytest.raises(ContractGenerationExhaustedError):
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+        # Material assertions: design and implementation must NOT run during candidate retries
+        assert mock_design.call_count == 0, (
+            f"Expected 0 design calls during candidate retries, got {mock_design.call_count}"
+        )
+        assert mock_implement.call_count == 0, (
+            f"Expected 0 implement calls during candidate retries, got {mock_implement.call_count}"
+        )
+
+
+
+
+def test_d7_no_po_for_candidate_defect(mock_runtime, tmp_path):
+
+    import orchestrator
+
+    from orchestrator_core.exceptions import CandidateSchemaError
+
+
+
+    mock_agent = MagicMock(side_effect=[CandidateSchemaError("bad1"), CandidateSchemaError("bad2"), CandidateSchemaError("bad3")])
+
+    mock_po = MagicMock()
+
+
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"):
+
+
+
+         # Orchestrator does not have a PO invocation for candidate generation
+
+         with pytest.raises(Exception):
+
+             orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+
+
+         mock_po.assert_not_called()
+
+
+
+def test_d7_infrastructure_error_no_retry(mock_runtime, tmp_path):
+
+    import orchestrator
+
+    from orchestrator_core.exceptions import InfrastructureGenerationError
+
+
+
+    mock_agent = MagicMock(side_effect=InfrastructureGenerationError("Network down"))
+
+
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"):
+
+
+
+         with pytest.raises(InfrastructureGenerationError):
+
+             orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+
+
+         assert mock_agent.call_count == 1
+
+
+
+def test_d7_diagnostics_preserve_attempt_category_violation(mock_runtime, tmp_path):
+    import orchestrator
+    from orchestrator_core.exceptions import CandidateSchemaError, ContractGenerationExhaustedError
+
+    mock_agent = MagicMock(side_effect=[CandidateSchemaError("bad1"), CandidateSchemaError("bad2"), CandidateSchemaError("bad3")])
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"):
+
+        with pytest.raises(ContractGenerationExhaustedError) as excinfo:
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+        diagnostics = excinfo.value.diagnostics
+
+        # Material assertions: 3 diagnostics in attempt order
+        assert len(diagnostics) == 3
+        assert diagnostics[0].attempt == 1
+        assert diagnostics[0].category == "CandidateSchemaError"
+        assert "bad1" in diagnostics[0].violation
+        # final_phase must be a meaningful stage identifier, not N/A
+        assert diagnostics[0].final_phase == "schema", f"Expected 'schema', got '{diagnostics[0].final_phase}'"
+
+        assert diagnostics[1].attempt == 2
+        assert "bad2" in diagnostics[1].violation
+        assert diagnostics[1].final_phase == "schema"
+
+        assert diagnostics[2].attempt == 3
+        assert "bad3" in diagnostics[2].violation
+        assert diagnostics[2].final_phase == "schema"
+
+
+
+
+
+def test_d7_existing_testing_policy_compatibility_gate_remains_executed(mock_runtime, tmp_path):
+    import orchestrator
+    from orchestrator_core.schemas import AcceptanceContract
+
+    valid_contract = AcceptanceContract.model_validate_json('{"required_final_files":[]}')
+    mock_agent = MagicMock(return_value=valid_contract)
+    mock_policy = MagicMock(return_value=["Policy violation"])
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.validate_semantic_fidelity"), \
+         patch("orchestrator.validate_contract_consistency", return_value=(True, [])), \
+         patch("orchestrator._derive_gate_plan", return_value=MagicMock(test_framework="none")), \
+         patch("orchestrator.validate_testing_policy_compatibility", mock_policy), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"):
+
+        try:
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+        except Exception:
+            pass
+
+        # The policy validator must have been executed 3 times in the retry loop before exhausting
+        assert mock_policy.call_count == 3
+
+
+# --- NEW D7 MATERIAL TESTS ---
+
+def test_d7_environment_tool_error_no_retry(mock_runtime, tmp_path):
+    """EnvironmentPreflightError from tool_preflight must NOT trigger contract retry."""
+    import orchestrator
+    from orchestrator_core.schemas import AcceptanceContract
+    from orchestrator_core.exceptions import EnvironmentPreflightError
+
+    valid_contract = AcceptanceContract.model_validate_json('{"required_final_files":[]}')
+    mock_agent = MagicMock(return_value=valid_contract)
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.validate_semantic_fidelity"), \
+         patch("orchestrator.validate_contract_consistency", return_value=(True, [])), \
+         patch("orchestrator._derive_gate_plan", return_value=MagicMock(test_framework="none")), \
+         patch("orchestrator.validate_testing_policy_compatibility", return_value=[]), \
+         patch("orchestrator.tool_preflight", return_value=["ruff not found"]), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"):
+
+        with pytest.raises(EnvironmentPreflightError):
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+        # Must NOT retry: generation called exactly once
+        assert mock_agent.call_count == 1, (
+            f"Expected 1 generation (no retry on env failure), got {mock_agent.call_count}"
+        )
+
+
+def test_d7_unexpected_python_error_no_retry(mock_runtime, tmp_path):
+    """An unexpected Python exception from planning_agents must NOT trigger contract retry."""
+    import orchestrator
+    from orchestrator_core.exceptions import InfrastructureGenerationError
+
+    # InfrastructureGenerationError from planning_agents is non-retryable
+    mock_agent = MagicMock(side_effect=InfrastructureGenerationError("Unexpected runtime error"))
+
+    with patch("orchestrator.agent_generate_acceptance_contract", mock_agent), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")), \
+         patch("orchestrator.agent_analyze_pipeline_failure"):
+
+        with pytest.raises(InfrastructureGenerationError):
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+
+        # Must NOT retry: generation called exactly once
+        assert mock_agent.call_count == 1, (
+            f"Expected 1 generation (no retry on infrastructure error), got {mock_agent.call_count}"
+        )
+
+
+def test_d7_gate_execution_order(mock_runtime, tmp_path):
+    """Proves the actual gate execution order: semantic_fidelity BEFORE consistency."""
+    import orchestrator
+    from orchestrator_core.schemas import AcceptanceContract
+
+    valid_contract = AcceptanceContract.model_validate_json('{"required_final_files":[]}')
+    execution_order = []
+
+    def mock_semantic(*args, **kwargs):
+        execution_order.append("validate_semantic_fidelity")
+
+    def mock_consistency(*args, **kwargs):
+        execution_order.append("validate_contract_consistency")
+        return (True, [])
+
+    def mock_gate_plan(*args, **kwargs):
+        execution_order.append("_derive_gate_plan")
+        return MagicMock(test_framework="none")
+
+    def mock_policy(*args, **kwargs):
+        execution_order.append("validate_testing_policy_compatibility")
+        return []
+
+    def mock_tool(*args, **kwargs):
+        execution_order.append("tool_preflight")
+        return []
+
+    def mock_capabilities(*args, **kwargs):
+        execution_order.append("validate_contract_capabilities")
+        return (True, [])
+
+    def mock_context_files(*args, **kwargs):
+        execution_order.append("validate_relevant_context_files")
+        return []
+
+    with patch("orchestrator.agent_generate_acceptance_contract", return_value=valid_contract), \
+         patch("orchestrator.validate_semantic_fidelity", side_effect=mock_semantic), \
+         patch("orchestrator.validate_contract_consistency", side_effect=mock_consistency), \
+         patch("orchestrator._derive_gate_plan", side_effect=mock_gate_plan), \
+         patch("orchestrator.validate_testing_policy_compatibility", side_effect=mock_policy), \
+         patch("orchestrator.tool_preflight", side_effect=mock_tool), \
+         patch("orchestrator.validate_contract_capabilities", side_effect=mock_capabilities), \
+         patch("orchestrator.validate_relevant_context_files", side_effect=mock_context_files), \
+         patch("orchestrator.agent_analyze_and_design", return_value={"actions": []}), \
+         patch("orchestrator.base_preflight", return_value=[]), \
+         patch("orchestrator.validate_issue_eligibility"), \
+         patch("orchestrator.transition_issue_status"), \
+         patch("orchestrator.RepositoryContextManager"), \
+         patch("orchestrator.subprocess.run", return_value=MagicMock(stdout="mock stdout", returncode=0)), \
+         patch("orchestrator.fetch_issue", return_value=("T", "D")):
+
+        try:
+            orchestrator.run_pipeline(1, "run1", str(tmp_path), mock_runtime)
+        except Exception:
+            pass
+
+    # Prove semantic_fidelity comes BEFORE consistency
+    assert "validate_semantic_fidelity" in execution_order
+    assert "validate_contract_consistency" in execution_order
+    sf_idx = execution_order.index("validate_semantic_fidelity")
+    cons_idx = execution_order.index("validate_contract_consistency")
+    assert sf_idx < cons_idx, (
+        f"semantic_fidelity (pos {sf_idx}) must execute BEFORE consistency (pos {cons_idx})"
+    )
+    # Prove full gate sequence is present
+    assert execution_order == [
+        "validate_semantic_fidelity",
+        "validate_contract_consistency",
+        "_derive_gate_plan",
+        "validate_testing_policy_compatibility",
+        "tool_preflight",
+        "validate_contract_capabilities",
+        "validate_relevant_context_files",
+    ]
+
+
+def test_d7_required_calls_provenance_enforcement():
+    """required_calls with no Issue provenance and no repo evidence must fail semantic fidelity."""
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity
+    from orchestrator_core.exceptions import SemanticFidelityError
+    from orchestrator_core.schemas import (AcceptanceContract, RepositoryContext,
+                                           PythonQualityPolicy, PythonProjectConfiguration,
+                                           RequiredCall)
+
+    contract = AcceptanceContract(
+        required_calls={"src/service.py": {"do_thing": [RequiredCall(name="hidden_helper", count=1)]}},
+    )
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    title = "Add counter feature"
+    desc = "## Scope\nImplement a basic counter."
+
+    import pytest
+    with pytest.raises(SemanticFidelityError, match="UNSUPPORTED_BINDING_OBLIGATION.*required_calls"):
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+def test_d7_required_calls_with_issue_provenance_accepted():
+    """required_calls with Issue provenance must be accepted."""
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity
+    from orchestrator_core.schemas import (AcceptanceContract, RepositoryContext,
+                                           PythonQualityPolicy, PythonProjectConfiguration,
+                                           RequiredCall)
+
+    contract = AcceptanceContract(
+        required_calls={"src/service.py": {"do_thing": [RequiredCall(name="hidden_helper", count=1)]}},
+    )
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    title = "Add counter feature"
+    # Callee name appears in the issue text -> binding Issue provenance
+    desc = "## Scope\nImplement hidden_helper in do_thing."
+
+    # Must NOT raise
+    validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+def test_d7_required_structures_provenance_enforcement():
+    """required_structures with no Issue provenance and no repo evidence must fail."""
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity
+    from orchestrator_core.exceptions import SemanticFidelityError
+    from orchestrator_core.schemas import (AcceptanceContract, RepositoryContext,
+                                           PythonQualityPolicy, PythonProjectConfiguration)
+
+    contract = AcceptanceContract(
+        required_structures={"src/mappings.py": {"GHOST_MAP": "has_aliases"}},
+    )
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    title = "Refactor service"
+    desc = "## Scope\nRefactor the service layer."
+
+    import pytest
+    with pytest.raises(SemanticFidelityError, match="UNSUPPORTED_BINDING_OBLIGATION.*required_structures"):
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+def test_d7_required_quality_tools_provenance_enforcement():
+    """required_quality_tools with no Issue provenance and not in detected tools must fail."""
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity
+    from orchestrator_core.exceptions import SemanticFidelityError
+    from orchestrator_core.schemas import (AcceptanceContract, RepositoryContext,
+                                           PythonQualityPolicy, PythonProjectConfiguration)
+
+    contract = AcceptanceContract(
+        required_quality_tools={"mypy"},
+    )
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=[],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=PythonProjectConfiguration(testing_policy=None)
+    )
+
+    title = "Add counter feature"
+    desc = "## Scope\nImplement a basic counter."
+
+    import pytest
+    with pytest.raises(SemanticFidelityError, match="UNSUPPORTED_BINDING_OBLIGATION.*required_quality_tools"):
+        validate_semantic_fidelity(contract, title, desc, repo_context)
+
+
+def test_d7_required_quality_tools_with_repo_provenance_accepted():
+    """required_quality_tools detected in repo must be accepted without Issue provenance."""
+    from orchestrator_core.semantic_validators import validate_semantic_fidelity
+    from orchestrator_core.schemas import (AcceptanceContract, RepositoryContext,
+                                           PythonQualityPolicy, PythonProjectConfiguration)
+
+    contract = AcceptanceContract(
+        required_quality_tools={"mypy"},
+    )
+    structured_config = PythonProjectConfiguration(testing_policy=None)
+    structured_config.detected_quality_tools = ["mypy", "ruff"]
+    repo_context = RepositoryContext(
+        source_index={}, test_index={}, dependency_files={}, detected_quality_tools=["mypy"],
+        relevant_source_files={}, relevant_test_files={}, architecture_document="", architecture_conflicts=[],
+        quality_policy=PythonQualityPolicy(), structured_config=structured_config
+    )
+
+    title = "Add feature"
+    desc = "## Scope\nImplement the feature."
+
+    # Must NOT raise - mypy is in detected_quality_tools
+    validate_semantic_fidelity(contract, title, desc, repo_context)

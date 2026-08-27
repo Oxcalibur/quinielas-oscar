@@ -48,9 +48,9 @@ from orchestrator_core.ast_utils import (
 from github import Auth, Github
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field, ValidationError
-from typing import Literal, Any
-
+from pydantic import BaseModel, ValidationError
+from typing import Dict, List, Any, Optional, Tuple, Literal
+from orchestrator_core.semantic_validators import validate_semantic_fidelity
 from orchestrator_core.runtime import RuntimeClients, build_runtime_clients
 
 # --- CONFIGURACION DE MODELOS GEMINI 3 (VIGENCIA 2026) ---
@@ -140,7 +140,7 @@ from orchestrator_core.exceptions import ContractGenerationError
 _VALID_VALIDATION_METHODS = {"protected_test", "required_test", "semantic_reviewer"}
 
 
-    
+
 
 
 
@@ -223,7 +223,7 @@ def validate_contract_capabilities(contract: AcceptanceContract, registry: dict)
         for tool in contract.required_quality_tools
         if tool.lower() in {"pytest", "unittest"}
     }
-    
+
     if len(required_frameworks) > 1:
         errors.append(
             "Contrato inconsistente: no se pueden requerir "
@@ -340,7 +340,7 @@ def run_orchestrator(issue_id: int, github_token: str | None = None, runtime: Ru
 
     run_log_dir = os.path.join(".agent-runs", run_id)
     os.makedirs(run_log_dir, exist_ok=True)
-    
+
     run_pipeline(issue_id, run_id, run_log_dir, runtime)
 
 
@@ -458,10 +458,10 @@ def materialize_cached_files(generated_files: dict[str, str], feedback_dict: dic
 
 
 def handle_pipeline_failure(
-    issue_id: int, 
-    title: str, 
-    error_msg: str, 
-    run_log_dir: str, 
+    issue_id: int,
+    title: str,
+    error_msg: str,
+    run_log_dir: str,
     runtime: RuntimeClients,
     pipeline_exc: Exception | None = None,
     gate_results: list = None,
@@ -486,7 +486,7 @@ def handle_pipeline_failure(
         try: runtime.repo.get_label("status:failed")
         except: runtime.repo.create_label("status:failed", "ff0000")
         issue.add_to_labels("status:failed")
-        
+
         if flat_gates and design is not None and generated_files is not None and issue_description is not None:
             logging.info("Analizando el fallo del pipeline con el agente LLM...")
             try:
@@ -499,7 +499,7 @@ def handle_pipeline_failure(
                 issue.create_comment(f"## Fallo SDLC Pipeline\nEl Agente fallo durante la ejecucion: `{error_msg}`\nRevisa los logs locales en `{run_log_dir}`.")
         else:
             issue.create_comment(f"## Fallo SDLC Pipeline\nEl Agente fallo durante la ejecucion: `{error_msg}`\nRevisa los logs locales en `{run_log_dir}`.")
-            
+
     except Exception as gh_exc:
         logging.error(f"Fallo al actualizar el issue tras un error crítico: {gh_exc}")
     if pipeline_exc:
@@ -556,10 +556,10 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
         transition_issue_status(issue_id, runtime)
         title, desc = fetch_issue(issue_id, runtime.repo)
         logging.info(f"Pipeline iniciado - Issue #{issue_id}: '{title}'")
-        
+
         # --- PHASE 1: Contract Generation and Validation (Critical, Fail-Fast) ---
         initial_gates: list[GateResult] = []
-        
+
         def _record(gate: GateResult) -> GateResult:
             initial_gates.append(gate)
             flat_gates.append(gate)
@@ -571,7 +571,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             error_str = " | ".join(preflight_errors)
             logging.error(f"Fallo en el preflight base: {preflight_errors}")
             raise PreflightError(error_str)
-        
+
         context_budget = ContextBudget()
         repo_context = context_manager.build_repository_context(desc, context_budget)
         logging.info(f"Contexto del repositorio construido. {len(repo_context.source_index)} archivos fuente y {len(repo_context.test_index)} archivos de test indexados.")
@@ -589,50 +589,107 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             raise ContractGenerationError("Conflictos de arquitectura bloqueantes detectados.")
 
         canonical_contract: AcceptanceContract
-        try:
-            canonical_contract = agent_generate_acceptance_contract(title, desc, repo_context, runtime)
-            logging.info(f"Contrato Canónico generado: {canonical_contract.model_dump_json(indent=2)}")
-            _record(GateResult(attempt=1, name="contract_generation", executed=True, passed=True, output="Contrato generado con éxito."))
-        except Exception as e:
-            logging.error(f"Fallo crítico al generar el contrato de aceptación: {e}")
-            _record(GateResult(attempt=1, name="contract_generation", executed=True, passed=False, output=f'{type(e).__name__}: {str(e)}'))
-            raise
+        from orchestrator_core.exceptions import (
+            CandidateSchemaError, SemanticFidelityError, ContractConsistencyError,
+            ContractPreflightError, EnvironmentPreflightError, ContractCapabilityError,
+            ContractGenerationExhaustedError
+        )
 
-        consistent, consistency_errors = validate_contract_consistency(canonical_contract)
-        _record(GateResult(attempt=1, name="contract_consistency", executed=True, passed=consistent, output="\n".join(consistency_errors) if consistency_errors else "Contrato consistente."))
-        if not consistent:
-            logging.error(f"Inconsistencias lógicas en el contrato: {consistency_errors}")
-            raise ContractGenerationError(f"Contrato inconsistente: {consistency_errors}")
 
-        gate_plan = _derive_gate_plan(repo_context, canonical_contract)
-        
-        policy_errors = validate_testing_policy_compatibility(gate_plan.test_framework, canonical_contract)
-        if policy_errors:
-            logging.error(f"Fallo en compatibilidad de testing policy: {policy_errors}")
-            raise PreflightError(" | ".join(policy_errors))
+        attempt_contract = 1
+        max_contract_attempts = 3
+        diagnostics = []
+        prior_contract_feedback = ""
+        import collections
+        Diagnostic = collections.namedtuple('Diagnostic', ['attempt', 'category', 'violation', 'final_phase'])
+        while attempt_contract <= max_contract_attempts:
+            try:
+                canonical_contract = agent_generate_acceptance_contract(title, desc, repo_context, runtime, prior_feedback=prior_contract_feedback)
+                logging.info(f"Contrato Canónico generado: {canonical_contract.model_dump_json(indent=2)}")
+                _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=True, output="Contrato generado con éxito."))
 
-        tool_errors = tool_preflight(gate_plan)
-        _record(GateResult(attempt=1, name="tool_preflight", executed=True, passed=not tool_errors, output="\n".join(tool_errors) if tool_errors else "Herramientas de análisis disponibles."))
-        if tool_errors:
-            logging.error(f"Fallo en el preflight de herramientas dinámicas: {tool_errors}")
-            raise PreflightError(" | ".join(tool_errors))
+                # Gate: Semantic fidelity FIRST (before consistency)
+                try:
+                    validate_semantic_fidelity(canonical_contract, title, desc, repo_context)
+                except SemanticFidelityError as sf_e:
+                    _record(GateResult(attempt=attempt_contract, name="contract_semantic_fidelity", executed=True, passed=False, output=str(sf_e)))
+                    raise
+                _record(GateResult(attempt=attempt_contract, name="contract_semantic_fidelity", executed=True, passed=True, output="Fidelidad semántica verificada."))
 
-        contract_capabilities_valid, contract_capabilities_errors = validate_contract_capabilities(canonical_contract, _validator_registry)
-        _record(GateResult(attempt=1, name="contract_capabilities_validation", executed=True, passed=contract_capabilities_valid, output="\n".join(contract_capabilities_errors)))
-        if not contract_capabilities_valid:
-            logging.error(f"El contrato contiene reglas no soportadas por el orquestador: {contract_capabilities_errors}")
-            raise ContractGenerationError("Contrato generado con reglas no soportadas.")
+                consistent, consistency_errors = validate_contract_consistency(canonical_contract)
+                _record(GateResult(attempt=attempt_contract, name="contract_consistency", executed=True, passed=consistent, output="\n".join(consistency_errors) if consistency_errors else "Contrato consistente."))
+                if not consistent:
+                    raise ContractConsistencyError(f"Contrato inconsistente: {consistency_errors}")
 
-        relevant_context_errors = validate_relevant_context_files(repo_context, canonical_contract)
-        _record(GateResult(attempt=1, name="relevant_context_validation", executed=True, passed=not relevant_context_errors, output="\n".join(relevant_context_errors) if relevant_context_errors else "Archivos de contexto relevantes validados."))
-        if relevant_context_errors:
-            logging.error(f"Archivos de contexto relevantes no encontrados: {relevant_context_errors}")
-            raise ContractGenerationError(" | ".join(relevant_context_errors))
+                try:
+                    gate_plan = _derive_gate_plan(repo_context, canonical_contract)
+                except PreflightError as gp_e:
+                    # PreflightError from _derive_gate_plan is contract-caused -> retryable
+                    raise ContractPreflightError(str(gp_e)) from gp_e
+
+                policy_errors = validate_testing_policy_compatibility(gate_plan.test_framework, canonical_contract)
+                if policy_errors:
+                    raise ContractPreflightError(" | ".join(policy_errors))
+
+                # Tool/environment preflight: non-retryable (environment failure)
+                tool_errors = tool_preflight(gate_plan)
+                _record(GateResult(attempt=attempt_contract, name="tool_preflight", executed=True, passed=not tool_errors, output="\n".join(tool_errors) if tool_errors else "Herramientas de análisis disponibles."))
+                if tool_errors:
+                    raise EnvironmentPreflightError(" | ".join(tool_errors))
+
+                contract_capabilities_valid, contract_capabilities_errors = validate_contract_capabilities(canonical_contract, _validator_registry)
+                _record(GateResult(attempt=attempt_contract, name="contract_capabilities_validation", executed=True, passed=contract_capabilities_valid, output="\n".join(contract_capabilities_errors)))
+                if not contract_capabilities_valid:
+                    raise ContractCapabilityError("Contrato generado con reglas no soportadas.")
+
+                relevant_context_errors = validate_relevant_context_files(repo_context, canonical_contract)
+                _record(GateResult(attempt=attempt_contract, name="relevant_context_validation", executed=True, passed=not relevant_context_errors, output="\n".join(relevant_context_errors) if relevant_context_errors else "Archivos de contexto relevantes validados."))
+                if relevant_context_errors:
+                    raise ContractConsistencyError(" | ".join(relevant_context_errors))
+
+                break # Success!
+
+            except EnvironmentPreflightError:
+                # Tool/environment failure: non-retryable, propagate immediately
+                logging.error(f"Fallo de entorno no recuperable (intento {attempt_contract}): herramientas no disponibles.")
+                _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=False, output="EnvironmentPreflightError: herramientas no disponibles."))
+                raise
+
+            except (CandidateSchemaError, SemanticFidelityError, ContractConsistencyError, ContractCapabilityError, ContractPreflightError) as e:
+                logging.error(f"Fallo en contrato (intento {attempt_contract}): {e}")
+
+                # Assign category and final_phase
+                if isinstance(e, CandidateSchemaError):
+                    cat = "CandidateSchemaError"
+                    final_phase = "schema"
+                elif isinstance(e, SemanticFidelityError):
+                    cat = "SemanticFidelityError"
+                    final_phase = "semantic_fidelity"
+                elif isinstance(e, ContractConsistencyError):
+                    cat = "ContractConsistencyError"
+                    final_phase = "consistency"
+                elif isinstance(e, ContractCapabilityError):
+                    cat = "ContractCapabilityError"
+                    final_phase = "capability"
+                else:  # ContractPreflightError
+                    cat = "ContractPreflightError"
+                    final_phase = "gate_plan"
+
+                diagnostics.append(Diagnostic(attempt=attempt_contract, category=cat, violation=str(e), final_phase=final_phase))
+                prior_contract_feedback = str(e)
+
+                if attempt_contract >= max_contract_attempts:
+                    raise ContractGenerationExhaustedError("Exhausted contract generation attempts", diagnostics=diagnostics) from e
+                attempt_contract += 1
+            except Exception as e:
+                logging.error(f"Fallo crítico al generar el contrato de aceptación: {e}")
+                _record(GateResult(attempt=attempt_contract, name="contract_generation", executed=True, passed=False, output=f'{type(e).__name__}: {str(e)}'))
+                raise
 
         # Cargar el contenido de los relevant_context_files solicitados por contrato respetando ContextBudget
         _base_tokens = estimate_repository_context_tokens(repo_context, desc, canonical_contract)
         _remaining_budget = max(0, context_budget.maximum_input_tokens - context_budget.reserved_output_tokens - _base_tokens)
-        
+
         for f in canonical_contract.relevant_context_files:
             if f in repo_context.relevant_source_files or f in repo_context.relevant_test_files:
                 continue # Ya cargado
@@ -652,6 +709,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                         logging.warning(f"Omitido contexto adicional (fuera de presupuesto): {f}")
             except Exception as e:
                 logging.warning(f"No se pudo cargar contexto '{f}': {e}")
+
 
         # --- PHASE 2: Iterative Development Attempts ---
 
@@ -686,7 +744,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
         context_expansion_count = 0
         max_context_expansions = 2
         requested_context_history: set[str] = set()
-        
+
         generated_files, feedback_dict = {}, {}
         design, design_feedback = None, ""
         all_attempt_results.append(initial_gates) # Add initial gates to results
@@ -705,12 +763,12 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             if design is None: # Diseñar solo si no existe un plan previo
                 logging.info("Diseñando plan estructural base o rediseñando tras rechazo...")
                 design = agent_analyze_and_design(
-                    title, 
-                    desc, 
-                    canonical_contract, 
-                    repo_context, 
-                    runtime, 
-                    context_manager=context_manager, 
+                    title,
+                    desc,
+                    canonical_contract,
+                    repo_context,
+                    runtime,
+                    context_manager=context_manager,
                     design_feedback=design_feedback
                 )
 
@@ -727,7 +785,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                     logging.info(f"[Arquitecto pide más contexto]: {reason}")
 
                     requested_paths = set(context_req.get("requested_files", []))
-                    
+
                     # Symbol resolution
                     for sym in context_req.get("requested_symbols", []):
                         requested_paths.update(locate_symbol(sym, repo_context))
@@ -736,25 +794,25 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                     for f in requested_paths:
                         if f in requested_context_history:
                             continue # Already evaluated this file
-                        
+
                         requested_context_history.add(f)
-                        
+
                         if f in repo_context.source_index or f in repo_context.test_index:
                             if f not in repo_context.relevant_source_files and f not in repo_context.relevant_test_files:
                                 # Estimate token usage. fallback if not present
                                 summary = repo_context.source_index.get(f) or repo_context.test_index.get(f)
                                 tokens = getattr(summary, 'estimated_tokens', 1000)
-                                
+
                                 if not context_usage.can_add(tokens):
                                     logging.warning(f"No se puede inyectar '{f}', supera el presupuesto de tokens.")
                                     continue
-                                
+
                                 content = context_manager.get_file_content(f)
                                 if f in repo_context.test_index:
                                     repo_context.relevant_test_files[f] = content
                                 else:
                                     repo_context.relevant_source_files[f] = content
-                                
+
                                 context_usage.add(tokens)
                                 added_files += 1
 
@@ -797,7 +855,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
 
             for act in [a for a in design.get('actions', []) if a['operation'].upper() == "DELETE"]:
                 safe_path = resolve_safe_path(".", act['filepath'])
-                if os.path.exists(safe_path): 
+                if os.path.exists(safe_path):
                     os.remove(safe_path)
 
             # --- BUCLE DE IMPLEMENTACIÓN Y VALIDACIÓN TEMPRANA ---
@@ -812,29 +870,29 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
 
                 current_feedback = f"{global_feedback}\n{file_feedback}".strip()
 
-                if act in code_actions: 
+                if act in code_actions:
                     file_contract = _create_file_contract(path, canonical_contract)
                     code = agent_implement_code(
-                        act, 
-                        file_contract, 
-                        design, 
-                        generated_files, 
-                        repo_context, 
-                        runtime, 
-                        context_manager=context_manager, 
+                        act,
+                        file_contract,
+                        design,
+                        generated_files,
+                        repo_context,
+                        runtime,
+                        context_manager=context_manager,
                         feedback=current_feedback
                     )
-                else: 
+                else:
                     file_contract = _create_file_contract(path, canonical_contract)
                     code = agent_generate_tests(
-                        act, 
-                        file_contract, 
-                        generated_files, 
-                        desc, 
-                        repo_context, 
-                        gate_plan.test_framework, 
-                        runtime, 
-                        context_manager=context_manager, 
+                        act,
+                        file_contract,
+                        generated_files,
+                        desc,
+                        repo_context,
+                        gate_plan.test_framework,
+                        runtime,
+                        context_manager=context_manager,
                         feedback=current_feedback
                     )
 
@@ -906,7 +964,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                         continue
                 else:
                     files_for_mypy = build_mypy_scope(generated_files, repo_context)
-                    
+
                     if not files_for_mypy:
                         current_attempt_gates.append(GateResult(attempt=attempt, name="mypy", executed=False, passed=True, output="Sin archivos válidos para MyPy."))
                     else:
@@ -969,13 +1027,13 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                 combined_test_paths = set(repo_context.test_index.keys()) | {act["filepath"] for act in test_actions}
                 static_passed, static_log = run_static_analysis(list(generated_files.keys()), gate_plan, combined_test_paths)
                 reload_code_after_ruff(generated_files, context_manager) # Recargar por si --fix modificó algo
-                
+
                 # Re-evaluar AST y política de calidad por si Ruff rompió algo
                 contract_failed = False
                 for p, c in generated_files.items():
                     c_errors = validate_contractual_ast(c, p, canonical_contract, repo_context=repo_context)
                     q_valid, q_errors = validate_code_quality(c, p, repo_context.quality_policy)
-                    
+
                     if c_errors or not q_valid:
                         logging.warning(f"Ruff --fix introdujo regresiones en '{p}'")
                         err_msg = ""
@@ -983,12 +1041,12 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                         if not q_valid:
                             errors_str = q_errors if isinstance(q_errors, str) else "\n".join(q_errors)
                             err_msg += "\nErrores de calidad estricta:\n" + errors_str
-                        
+
                         feedback_dict[p] = err_msg
                         contract_failed = True
                         static_passed = False
                         static_log += f"\n[Ruff --fix Regression] {p}: {err_msg}"
-                        
+
                 # Verify that Ruff didn't revert a file to its baseline state, effectively erasing the modification
                 manifest_valid, manifest_error = validate_generated_manifest(generated_files, canonical_contract, repo_context)
                 if not manifest_valid:
@@ -996,7 +1054,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                     contract_failed = True
                     static_passed = False
                     static_log += f"\n[Ruff --fix Regression Manifest]: {manifest_error}"
-                        
+
                 current_attempt_gates.append(GateResult(attempt=attempt, name="static_analysis", executed=True, passed=static_passed, output=static_log))
                 if not static_passed:
                     logging.warning(f"Análisis estático falló:\n{static_log}")
@@ -1107,7 +1165,7 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
             runtime,
         )
         man = agent_update_user_manual(issue_id, title, desc, design, generated_files, runtime)
-        
+
         try:
             # The deploy function will commit the staged changes
             deploy_to_github(design, generated_files, report, arch, man, issue_id, run_id, runtime)
@@ -1134,14 +1192,14 @@ if __name__ == "__main__":
 
     original_cwd = os.getcwd()
     run_id = f"RUN-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    
+
     # Define persistent log directory outside the worktree
     run_log_dir = os.path.join(original_cwd, ".agent-runs", run_id)
     os.makedirs(run_log_dir, exist_ok=True)
-    
+
     worktree_dir = os.path.join(original_cwd, ".agent-worktrees", run_id)
     worktree_created = False
-    
+
     try:
         # 1. O1: VALIDATE TARGET ISOLATION
         if bool(args.target_repo) != bool(args.target_workspace):
@@ -1210,7 +1268,7 @@ if __name__ == "__main__":
             worktree_created = True
 
         os.chdir(worktree_dir)
-        
+
         # 4. Run pipeline inside the worktree
         run_pipeline(args.issue, run_id, run_log_dir, runtime)
 
