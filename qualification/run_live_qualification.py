@@ -274,16 +274,19 @@ class QualificationHarness:
                 final_head = orig_run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
                 summary["TEMP_REPO_FINAL_HEAD"] = final_head
 
-                if baseline_head == final_head:
-                    pass # Handled by specific scenario rules if commit is required. Q1 requires a commit, so diff below will fail if identical.
+                head_changed = (baseline_head != final_head)
+                cache_clean = True
 
-                diff_res = orig_run(["git", "diff", "--name-only", f"{baseline_head}..{final_head}"], capture_output=True, text=True, check=True)
-                changed_files = diff_res.stdout.splitlines()
+                if head_changed:
+                    diff_res = orig_run(["git", "diff", "--name-only", f"{baseline_head}..{final_head}"], capture_output=True, text=True, check=True)
+                    changed_files = diff_res.stdout.splitlines()
+                    if any(f.endswith(".pyc") for f in changed_files) or any("__pycache__" in f for f in changed_files):
+                        cache_clean = False
 
-                if any(f.endswith(".pyc") for f in changed_files) or any("__pycache__" in f for f in changed_files):
-                    summary["SCENARIO_VERDICT"] = "FAIL"
-                else:
+                if head_changed and cache_clean:
                     summary["SCENARIO_VERDICT"] = "PASS"
+                else:
+                    summary["SCENARIO_VERDICT"] = "FAIL"
 
             except Exception as e:
                 summary["HARNESS_EXECUTION"] = f"FAIL ({e})"

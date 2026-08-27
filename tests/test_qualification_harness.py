@@ -376,3 +376,63 @@ def test_infrastructure_failure_no_retry_exactly_1_generation(mock_generate, moc
 
     assert mock_generate.call_count == 1
     assert summary["CONTRACT_GENERATION"].startswith("FAIL (PROVIDER/INFRASTRUCTURE:")
+
+def test_e2e_silent_pipeline_failure_fails_closed(tmp_path):
+    import subprocess
+    from qualification.run_live_qualification import QualificationHarness
+    fixture_dir = tmp_path / "fixtures" / "q1_greenfield"
+    fixture_dir.mkdir(parents=True)
+    (fixture_dir / "issue.md").write_text("Title:\ntitle\nBody:\nbody")
+    (fixture_dir / "repo").mkdir()
+    (fixture_dir / "repo" / "README.md").write_text("Dummy repo")
+
+    with patch("qualification.run_live_qualification.get_fixture_path", return_value=fixture_dir):
+        harness = QualificationHarness("e2e", "q1")
+
+        with patch("qualification.run_live_qualification.run_pipeline") as mock_rp:
+            repo_path = fixture_dir / "repo"
+            subprocess.run(["git", "init"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "add", "README.md"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Initial baseline commit"], cwd=repo_path, capture_output=True)
+
+            summary = {"RUN": 1, "HARNESS_EXECUTION": "PASS"}
+            harness.execute_mode(repo_path, MagicMock(), "title", "body", summary)
+
+            assert summary.get("HARNESS_EXECUTION") == "PASS"
+            assert summary.get("TEMP_REPO_BASELINE_HEAD") == summary.get("TEMP_REPO_FINAL_HEAD")
+            assert summary.get("SCENARIO_VERDICT") == "FAIL"
+
+def test_e2e_success_signal_passes(tmp_path):
+    import subprocess
+    from qualification.run_live_qualification import QualificationHarness
+    fixture_dir = tmp_path / "fixtures" / "q1_greenfield"
+    fixture_dir.mkdir(parents=True)
+    (fixture_dir / "issue.md").write_text("Title:\ntitle\nBody:\nbody")
+    (fixture_dir / "repo").mkdir()
+    (fixture_dir / "repo" / "README.md").write_text("Dummy repo")
+
+    with patch("qualification.run_live_qualification.get_fixture_path", return_value=fixture_dir):
+        harness = QualificationHarness("e2e", "q1")
+
+        def mock_run_pipeline(issue_id, run_id, log_dir, runtime):
+            repo_path = fixture_dir / "repo"
+            (repo_path / "main.py").write_text("print('hello')")
+            subprocess.run(["git", "add", "main.py"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Pipeline success"], cwd=repo_path, capture_output=True)
+
+        with patch("qualification.run_live_qualification.run_pipeline", side_effect=mock_run_pipeline):
+            repo_path = fixture_dir / "repo"
+            subprocess.run(["git", "init"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "add", "README.md"], cwd=repo_path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Initial baseline commit"], cwd=repo_path, capture_output=True)
+
+            summary = {"RUN": 1, "HARNESS_EXECUTION": "PASS"}
+            harness.execute_mode(repo_path, MagicMock(), "title", "body", summary)
+
+            assert summary.get("HARNESS_EXECUTION") == "PASS"
+            assert summary.get("TEMP_REPO_BASELINE_HEAD") != summary.get("TEMP_REPO_FINAL_HEAD")
+            assert summary.get("SCENARIO_VERDICT") == "PASS"
