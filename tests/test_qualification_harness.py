@@ -101,32 +101,12 @@ def test_q3_required_test_empty_protected_tests_rejected(tmp_path):
             )],
             protected_tests={}
         )
-        summary = {}
+        summary = {"SCENARIO_VERDICT": "PASS"}
         harness.check_invariants(contract, tmp_path, summary)
         assert summary.get("SCENARIO_VERDICT") == "FAIL"
 
 
 def test_q3_required_test_nonexistent_test_rejected(tmp_path):
-    fixture_dir = tmp_path / "fixtures" / "q3_preservation"
-    fixture_dir.mkdir(parents=True)
-    with patch("qualification.run_live_qualification.get_fixture_path", return_value=fixture_dir):
-        harness = QualificationHarness("contract", "q3")
-
-        contract = AcceptanceContract(
-            preserved_behaviors=[PreservedBehavior(
-                description="desc",
-                affected_files=["counter.py"],
-                validation_method="required_test",
-                protected_tests=["tests/test_counter.py::test_missing"]
-            )],
-            protected_tests={}
-        )
-        summary = {}
-        harness.check_invariants(contract, tmp_path, summary)
-        assert summary.get("SCENARIO_VERDICT") == "FAIL"
-
-
-def test_q3_required_test_valid_protected_test_accepted(tmp_path):
     fixture_dir = tmp_path / "fixtures" / "q3_preservation"
     fixture_dir.mkdir(parents=True)
     repo_path = tmp_path / "repo"
@@ -143,9 +123,61 @@ def test_q3_required_test_valid_protected_test_accepted(tmp_path):
                 description="desc",
                 affected_files=["counter.py"],
                 validation_method="required_test",
-                protected_tests=["tests/test_counter.py::TestCounter::test_increment_existing_behavior"]
+                protected_tests=[]
             )],
-            protected_tests={}
+            protected_tests={"tests/test_counter.py": ["test_missing"]}
+        )
+        summary = {"SCENARIO_VERDICT": "PASS"}
+        harness.check_invariants(contract, repo_path, summary)
+        assert summary.get("SCENARIO_VERDICT") == "FAIL"
+
+
+def test_q3_required_test_valid_top_level_test_accepted(tmp_path):
+    fixture_dir = tmp_path / "fixtures" / "q3_preservation"
+    fixture_dir.mkdir(parents=True)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True)
+    tests_dir = repo_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_counter.py").write_text("def test_increment_existing_behavior():\n    pass")
+
+    with patch("qualification.run_live_qualification.get_fixture_path", return_value=fixture_dir):
+        harness = QualificationHarness("contract", "q3")
+
+        contract = AcceptanceContract(
+            preserved_behaviors=[PreservedBehavior(
+                description="desc",
+                affected_files=["counter.py"],
+                validation_method="required_test",
+                protected_tests=[]
+            )],
+            protected_tests={"tests/test_counter.py": ["test_increment_existing_behavior"]}
+        )
+        summary = {"SCENARIO_VERDICT": "PASS"}
+        harness.check_invariants(contract, repo_path, summary)
+        assert summary.get("SCENARIO_VERDICT") == "PASS"
+
+
+def test_q3_required_test_valid_class_method_test_accepted(tmp_path):
+    fixture_dir = tmp_path / "fixtures" / "q3_preservation"
+    fixture_dir.mkdir(parents=True)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True)
+    tests_dir = repo_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_counter.py").write_text("class TestCounter:\n    def test_increment_existing_behavior(self):\n        pass")
+
+    with patch("qualification.run_live_qualification.get_fixture_path", return_value=fixture_dir):
+        harness = QualificationHarness("contract", "q3")
+
+        contract = AcceptanceContract(
+            preserved_behaviors=[PreservedBehavior(
+                description="desc",
+                affected_files=["counter.py"],
+                validation_method="required_test",
+                protected_tests=[]
+            )],
+            protected_tests={"tests/test_counter.py": ["test_increment_existing_behavior"]}
         )
         summary = {"SCENARIO_VERDICT": "PASS"}
         harness.check_invariants(contract, repo_path, summary)

@@ -329,22 +329,19 @@ class QualificationHarness:
         elif self.scenario == "q3":
             has_preservation = False
             for beh in (contract.preserved_behaviors or []):
-                if beh.validation_method == "required_test":
+                if beh.validation_method in ("required_test", "protected_test"):
                     has_preservation = True
-                    if not beh.protected_tests:
-                        summary["SCENARIO_VERDICT"] = "FAIL"
-                    else:
-                        for test_path in beh.protected_tests:
-                            if "::" not in test_path:
-                                summary["SCENARIO_VERDICT"] = "FAIL"
-                                continue
-                            file_part = test_path.split("::")[0]
-                            test_name = test_path.split("::")[-1]
-                            full_path = repo_path / file_part
+
+            if has_preservation:
+                if not contract.protected_tests:
+                    summary["SCENARIO_VERDICT"] = "FAIL"
+                else:
+                    for test_file, test_names in contract.protected_tests.items():
+                        full_path = repo_path / test_file
+                        for test_name in test_names:
                             if not check_test_exists_in_ast(full_path, test_name):
                                 summary["SCENARIO_VERDICT"] = "FAIL"
-
-            if not has_preservation:
+            else:
                 summary["SCENARIO_VERDICT"] = "FAIL"
 
 
