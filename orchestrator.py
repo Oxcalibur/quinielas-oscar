@@ -691,6 +691,32 @@ def generate_validated_acceptance_contract(
 
     return canonical_contract, gate_plan
 
+def _run_baseline_unittest_regression(repo_context: 'RepositoryContext') -> tuple[bool, str]:
+    """
+    Executes the baseline unittest regression.
+    Returns (success, log_output).
+    Passes only if all baseline files pass AND execute at least one test.
+    If ANY baseline file fails or executes 0 tests, the whole regression fails.
+    """
+    test_passed = True
+    regression_log = ""
+    tests_executed_globally = False
+
+    for baseline_file in repo_context.test_index.keys():
+        success, log = run_local_tests(resolve_safe_path(".", baseline_file), framework="unittest")
+        regression_log += f"\n--- BASELINE: {baseline_file} ---\n{log}"
+        if not success or "Ran 0 tests" in log:
+            test_passed = False
+        else:
+            tests_executed_globally = True
+
+    # Fail closed if baseline tests were expected but no valid tests ran globally
+    if repo_context.test_index and not tests_executed_globally:
+        test_passed = False
+
+    return test_passed, regression_log
+
+
 def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeClients) -> None:
     context_manager = RepositoryContextManager()
     pipeline_passed = False
@@ -1034,16 +1060,11 @@ def run_pipeline(issue_id: int, run_id: str, run_log_dir: str, runtime: RuntimeC
                     else:
                         logging.info(f"Ejecutando suite de regresión completa de {gate_plan.test_framework}...")
                         if gate_plan.test_framework == "unittest":
-                            regression_result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-v"], capture_output=True, text=True, timeout=600)
+                            test_passed, regression_log = _run_baseline_unittest_regression(repo_context)
                         else:
                             regression_result = subprocess.run([sys.executable, "-m", "pytest", "-v"], capture_output=True, text=True, timeout=600)
-
-                        test_passed = regression_result.returncode == 0
-                        regression_log = regression_result.stdout + regression_result.stderr
-
-                        # D5-A: Fail closed if baseline tests were expected but unittest ran 0 tests
-                        if gate_plan.test_framework == "unittest" and "Ran 0 tests" in regression_log:
-                            test_passed = False
+                            test_passed = regression_result.returncode == 0
+                            regression_log = regression_result.stdout + regression_result.stderr
 
                         test_log += f"\n--- REGRESIÓN COMPLETA ---\n{regression_log}"
 
