@@ -36,7 +36,7 @@ class RepositoryContextManager:
     def __init__(self, root_path=".", cache_dir=None):
         self.root_path = root_path
         self.ignored_dirs = {
-            ".git", "venv", "__pycache__", ".pytest_cache", 
+            ".git", "venv", "__pycache__", ".pytest_cache",
             ".env", "node_modules", "dist", "build"
         }
         if cache_dir is None:
@@ -62,13 +62,13 @@ class RepositoryContextManager:
                     repo_id = f"{owner}/{repo}"
             except Exception:
                 pass
-            
+
             if not repo_id:
                 abs_path = os.path.abspath(self.root_path)
                 hash_str = hashlib.md5(abs_path.encode()).hexdigest()[:8]
                 repo_name = os.path.basename(abs_path)
                 repo_id = f"local_{hash_str}/{repo_name}"
-                
+
             self.cache_dir = os.path.expanduser(f"~/.agent-runs/shared-cache/{repo_id}")
         else:
             self.cache_dir = cache_dir
@@ -79,24 +79,24 @@ class RepositoryContextManager:
         repo_map = []
         for root, dirs, files in os.walk(self.root_path):
             dirs[:] = [d for d in dirs if d not in self.ignored_dirs]
-            
+
             relative_path = os.path.relpath(root, self.root_path)
             level = 0 if relative_path == "." else relative_path.count(os.sep) + 1
             indent = "  " * level
-            
+
             if relative_path != ".":
                 repo_map.append(f"{indent}[DIR] {os.path.basename(root)}/")
-            
+
             for file in files:
                 if file.endswith(".py") and file not in ["orchestrator.py", "po_agent.py", "test_github.py", "test_ssl.py", "user_manual_generator.py"]:
                     file_indent = "  " * (level + 1)
                     repo_map.append(f"{file_indent}[FILE] {file}")
-                    
+
                     full_path = os.path.join(root, file)
                     signatures = self._extract_signatures(full_path)
                     for sig in signatures.values():
                         repo_map.append(f"{file_indent}  ↳ {sig}")
-                        
+
         return "\n".join(repo_map)
 
     def _extract_signatures(self, filepath: str) -> dict[str, str]:
@@ -147,10 +147,10 @@ class RepositoryContextManager:
             "conftest.py",
         ]
         dependency_files = [
-            "requirements.txt", "requirements-dev.txt", 
+            "requirements.txt", "requirements-dev.txt",
             "poetry.lock", "Pipfile"
         ]
-        
+
         project_configs: dict[str, str] = {}
         dep_files: dict[str, str] = {}
 
@@ -303,9 +303,9 @@ class RepositoryContextManager:
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
-            
+
             tree = ast.parse(content, filename=filepath)
-            
+
             imports, classes, functions, exports = [], [], [], []
             referenced_symbols = set()
 
@@ -360,7 +360,7 @@ class RepositoryContextManager:
             # Ignore common false positives
             if "orchestrator.py" in normalized_path or "po_agent" in normalized_path:
                 continue
-            
+
             if normalized_path not in all_paths:
                 conflicts.append(ArchitectureConflict(
                     type="MISSING_COMPONENT",
@@ -376,7 +376,7 @@ class RepositoryContextManager:
             for file, content in context.dependency_files.items():
                 if "pytest-mock" in content:
                     evidence.append(f"`pytest-mock` encontrado en `{file}`")
-            
+
             if evidence:
                 conflicts.append(ArchitectureConflict(
                     type="OUTDATED_TOOL_POLICY",
@@ -385,7 +385,7 @@ class RepositoryContextManager:
                     repository_evidence=evidence,
                     blocks_execution=True # A direct policy contradiction should block.
                 ))
-        
+
         # Heuristic 3: Check for mentioned symbols that don't exist in the code.
         # This finds symbols enclosed in backticks, which is a common markdown convention for code.
         mentioned_symbols = re.findall(r'`([\w_]+)`', context.architecture_document)
@@ -393,7 +393,7 @@ class RepositoryContextManager:
             # Ignore very common words that might be in backticks but aren't symbols
             if symbol.lower() in ['true', 'false', 'none', 'self', 'cls', 'x', 'y']:
                 continue
-            
+
             found = False
             for summary in all_summaries.values():
                 if symbol in summary.classes or symbol in summary.functions:
@@ -413,7 +413,7 @@ class RepositoryContextManager:
     def _derive_quality_policy(self, context: "RepositoryContext", issue_description: str):
         """Deriva la política de calidad de Python a partir de varias fuentes."""
         policy = PythonQualityPolicy()
-        
+
         # Combinar todas las fuentes de texto para facilitar la búsqueda
         arch_text = context.architecture_document.lower()
         issue_text = issue_description.lower()
@@ -439,7 +439,7 @@ class RepositoryContextManager:
         # 3. Exportaciones explícitas (__all__)
         if 'exportación explícita' in arch_text or 'require_explicit_exports' in issue_text:
             policy.require_explicit_exports = True
-            
+
         context.quality_policy = policy
         logging.info(f"Política de calidad derivada: {policy.model_dump_json()}")
 
@@ -531,9 +531,9 @@ class RepositoryContextManager:
 
         # Split content by any markdown header (level 1 or 2)
         sections = re.split(r'(^#{1,2}\s+.*?$)', full_content, flags=re.MULTILINE)
-        
+
         structured_sections: dict[str, str] = {}
-        
+
         # If no headers detected, fallback immediately
         if len(sections) < 2:
             return full_content[:budget_tokens * 4] + ("" if len(full_content) <= budget_tokens * 4 else "\n... [TRUNCADO]")
@@ -552,17 +552,17 @@ class RepositoryContextManager:
             structured_sections[header] = body
 
         core_keywords = ["overview", "system", "component", "flow", "data", "arquitectura", "interface", "restriccion", "1.", "2.", "3.", "4.", "5.", "6.", "7."]
-        
+
         core_content = ""
         historical_content = ""
-        
+
         for header, body in structured_sections.items():
             header_lower = header.lower()
             if any(k in header_lower for k in core_keywords):
                 core_content += f"{header}\n{body}\n\n"
             else:
                 historical_content += f"{header}\n{body}\n\n"
-        
+
         if not core_content.strip():
             core_content = full_content[:budget_tokens * 4]
             historical_content = ""
@@ -582,35 +582,145 @@ class RepositoryContextManager:
         else:
             return core_content + historical_content[:remaining_budget * 4] + "\n... [SECCIONES HISTÓRICAS TRUNCADAS]"
 
+    def _discover_authoritative_references(self, issue_description: str) -> list[tuple[str, str]]:
+        refs = []
+        import re
+
+        path_matches = re.findall(r'[\w/\\.-]+\.(?:md|txt|rst)', issue_description, flags=re.IGNORECASE)
+        for p in path_matches:
+            refs.append(p)
+
+        for line in issue_description.splitlines():
+            idx = line.lower().find("source requirements")
+            if idx != -1:
+                val_str = line[idx + len("source requirements"):].strip('*: ')
+                parts = val_str.split(',')
+                for p in parts:
+                    clean_ref = p.strip(' *')
+                    if clean_ref:
+                        refs.append(clean_ref)
+
+        # Deduplicate
+        unique_refs = list(dict.fromkeys(refs))
+
+        # Normalize
+        result = []
+        for ref in unique_refs:
+            search_str = ref
+            sec_match = re.match(r'^(?:secci[oó]n|section)\s+(.+)$', ref, flags=re.IGNORECASE)
+            if sec_match:
+                search_str = sec_match.group(1).strip()
+            result.append((ref, search_str))
+
+        return result
+
+    def _resolve_authoritative_documents(self, refs: list[tuple[str, str]], max_files: int = 5) -> tuple[dict[str, str], list[str]]:
+        import os
+        import re
+        from orchestrator_core.paths import resolve_safe_path
+        doc_contents = {}
+        for root, dirs, files in os.walk(self.root_path):
+            dirs[:] = [d for d in dirs if d not in self.ignored_dirs]
+            for file in files:
+                if file.lower().endswith(('.md', '.rst', '.txt')):
+                    full_path = os.path.join(root, file)
+                    rel = os.path.relpath(full_path, self.root_path).replace('\\', '/')
+                    try:
+                        with open(full_path, 'r', encoding='utf-8') as f:
+                            doc_contents[rel] = f.read()
+                    except Exception:
+                        pass
+
+        candidates = refs
+
+        doc_coverage = {df: [] for df in doc_contents}
+        explicit_paths = set()
+        resolved_candidates = set()
+
+        for cand_orig, search_str in candidates:
+            cand_resolved = False
+
+            if cand_orig.lower().endswith(('.md', '.rst', '.txt')):
+                try:
+                    cand_path = resolve_safe_path(self.root_path, cand_orig)
+                    rel = os.path.relpath(cand_path, self.root_path).replace('\\', '/')
+                    if rel in doc_contents:
+                        explicit_paths.add(rel)
+                        doc_coverage[rel].append(search_str)
+                        cand_resolved = True
+                        resolved_candidates.add(search_str)
+                        continue
+                    else:
+                        from orchestrator_core.prompt_budget import PreflightError
+                        raise PreflightError(f"Requisito normativo explícito no encontrado: {cand_orig}")
+                except PreflightError:
+                    raise
+                except Exception as e:
+                    from orchestrator_core.prompt_budget import PreflightError
+                    raise PreflightError(f"Requisito normativo explícito no encontrado: {cand_orig}")
+
+            for df, content in doc_contents.items():
+                if search_str.lower() in content.lower():
+                    doc_coverage[df].append(search_str)
+                    cand_resolved = True
+                    resolved_candidates.add(search_str)
+
+            if not cand_resolved:
+                from orchestrator_core.prompt_budget import PreflightError
+                raise PreflightError(f"Requisito normativo no encontrado: {cand_orig}")
+
+        selected_docs = set()
+        covered_so_far = set()
+        all_resolved = set(c[1] for c in candidates)
+
+        for p in explicit_paths:
+            selected_docs.add(p)
+            covered_so_far.update(doc_coverage[p])
+
+        remaining_docs = set(df for df in doc_contents if doc_coverage[df] and df not in selected_docs)
+
+        while covered_so_far != all_resolved and remaining_docs:
+            best_doc = min(remaining_docs, key=lambda df: (-len(set(doc_coverage[df]) - covered_so_far), df))
+            new_cov = set(doc_coverage[best_doc]) - covered_so_far
+            if not new_cov:
+                break
+
+            selected_docs.add(best_doc)
+            covered_so_far.update(doc_coverage[best_doc])
+            remaining_docs.remove(best_doc)
+
+        final = {df: doc_contents[df] for df in selected_docs}
+        return final, list(resolved_candidates)
+
     def build_repository_context(self, issue_description: str, budget: "ContextBudget") -> "RepositoryContext":
         """Builds a comprehensive, indexed context of the entire repository, using a cache."""
         context = RepositoryContext()
         context.repository_map = self.generate_repository_map()
-        
+
         # Apply architecture document budget
         arch_doc = self.read_architecture_document()
         context.architecture_document = self._summarize_architecture_document(arch_doc, budget.architecture_token_limit)
-        
+
         cached_index = self._load_cache()
-        
+
         context.project_configuration, context.dependency_files = self._scan_config_files()
         context.structured_config = self._extract_project_configuration(context.project_configuration, context.dependency_files)
-        
+
         source_files: dict[str, PythonFileSummary] = {}
         test_files: dict[str, PythonFileSummary] = {}
-        
+
         files_analyzed = 0
         files_from_cache = 0
-        
+
         for root, dirs, files in os.walk(self.root_path):
             dirs[:] = [d for d in dirs if d not in self.ignored_dirs]
             for file in files:
                 if file.endswith(".py"):
                     full_path = os.path.join(root, file)
                     relative_path = os.path.relpath(full_path, self.root_path).replace("\\", "/")
-                    
+
                     cached_summary = cached_index.source_index.get(relative_path) or cached_index.test_index.get(relative_path)
-                    
+
                     try:
                         with open(full_path, "rb") as f:
                             current_hash = hashlib.sha256(f.read()).hexdigest()
@@ -623,7 +733,7 @@ class RepositoryContextManager:
                             with open(full_path, "r", encoding="utf-8") as text_f:
                                 text_content = text_f.read()
                             current_is_test = is_test_file(relative_path, text_content, context.structured_config)
-                            
+
                             summary = cached_summary.model_copy(deep=True)
                             summary.is_test = current_is_test
                             files_from_cache += 1
@@ -645,14 +755,28 @@ class RepositoryContextManager:
                             test_files[summary.filepath] = summary
                         else:
                             source_files[summary.filepath] = summary
-        
+
         logging.info(f"Análisis de índice completado. {files_analyzed} archivos analizados, {files_from_cache} cargados desde caché.")
-        
+
         context.source_index = source_files
         context.test_index = test_files
-        
         self._save_cache(RepositoryIndexCache(source_index=source_files, test_index=test_files))
-        
+
+        auth_refs = self._discover_authoritative_references(issue_description)
+        if auth_refs:
+            try:
+                auth_docs, resolved_refs = self._resolve_authoritative_documents(auth_refs, max_files=budget.maximum_full_files)
+            except Exception as e:
+                from orchestrator_core.prompt_budget import PreflightError
+                if isinstance(e, PreflightError):
+                    raise
+                raise PreflightError(f"Technical error resolving authoritative documents: {e}")
+            context.authoritative_context_files = auth_docs
+            context.resolved_authoritative_references = resolved_refs
+        else:
+            context.authoritative_context_files = {}
+            context.resolved_authoritative_references = []
+
         self._link_dependencies(context)
         self._detect_testing_conventions(context)
 
@@ -664,12 +788,12 @@ class RepositoryContextManager:
         # This is a rough estimation of the fixed parts of the prompt
         base_prompt_tokens = estimate_repository_context_tokens(context, issue_description)
         available_tokens_for_files = budget.maximum_input_tokens - budget.reserved_output_tokens - base_prompt_tokens
-        
+
         logging.info(f"Presupuesto de tokens disponible para archivos: {available_tokens_for_files}")
 
         self.select_relevant_files(
-            context, 
-            issue_description, 
+            context,
+            issue_description,
             available_tokens_for_files,
             budget.maximum_full_files,
             budget.dependency_depth
@@ -687,12 +811,12 @@ class RepositoryContextManager:
             for source_path in resolved_files:
                 if source_path in context.source_index:
                     source_summary = context.source_index[source_path]
-                    
+
                     if source_path not in summary.imported_files:
                         summary.imported_files.append(source_path)
                     if path not in source_summary.imported_by:
                         source_summary.imported_by.append(path)
-                    
+
                     if summary.is_test and not source_summary.is_test:
                             if path not in source_summary.tested_by:
                                 source_summary.tested_by.append(path)
@@ -712,10 +836,10 @@ class RepositoryContextManager:
         populating the context's relevant_files fields within a token budget.
         """
         scores: dict[str, float] = {path: 0.0 for path in list(context.source_index.keys()) + list(context.test_index.keys())}
-        
+
         # Combine all text for searching
         search_text = (issue_description + " " + context.architecture_document).lower()
-        
+
         all_summaries = {**context.source_index, **context.test_index}
 
         # 1. Score based on symbol and path mentions
@@ -727,10 +851,10 @@ class RepositoryContextManager:
             for symbol in summary.classes + summary.functions:
                 if symbol.lower() in search_text:
                     scores[path] += 5
-        
+
         # 2. Propagate scores through dependency graph recursively
         high_score_files = {p for p, s in scores.items() if s > 0}
-        
+
         for i in range(dependency_depth):
             newly_boosted = set()
             # Propagate from high-score files to their direct dependencies
@@ -738,36 +862,36 @@ class RepositoryContextManager:
                 summary = all_summaries.get(path)
                 if not summary:
                     continue
-                
+
                 # Boost tests for this source
                 for test_path in summary.tested_by:
                     if test_path in scores and test_path not in high_score_files:
                         scores[test_path] += 3 / (i + 1)
                         newly_boosted.add(test_path)
-                
+
                 # Boost source for this test
                 for source_path in summary.tests_for:
                     if source_path in scores and source_path not in high_score_files:
                         scores[source_path] += 3 / (i + 1)
                         newly_boosted.add(source_path)
-                
+
                 # Boost imported files
                 for imp_path in summary.imported_files:
                     if imp_path in scores and imp_path not in high_score_files:
                         scores[imp_path] += 2 / (i + 1)
                         newly_boosted.add(imp_path)
-                        
+
                 # Boost files that import this
                 for imp_by_path in summary.imported_by:
                     if imp_by_path in scores and imp_by_path not in high_score_files:
                         scores[imp_by_path] += 1 / (i + 1)
                         newly_boosted.add(imp_by_path)
-            
+
             high_score_files.update(newly_boosted)
 
         # 3. Select files based on score and token budget
         sorted_files = sorted(scores.keys(), key=lambda p: scores[p], reverse=True)
-        
+
         current_tokens = 0
         files_selected = 0
         for path in sorted_files:

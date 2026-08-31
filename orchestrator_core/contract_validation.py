@@ -29,6 +29,9 @@ def validate_relevant_context_files(repo_context: "RepositoryContext", contract:
     """Validates that relevant_context_files listed in the contract actually exist in the repository index."""
     errors = []
     all_known = set(repo_context.source_index.keys()) | set(repo_context.test_index.keys())
+    # Also accept already-resolved authoritative context files as known
+    if hasattr(repo_context, 'authoritative_context_files') and repo_context.authoritative_context_files:
+        all_known = all_known | set(repo_context.authoritative_context_files.keys())
     for f in contract.relevant_context_files:
         if f not in all_known:
             errors.append(f"relevant_context_files: '{f}' no existe en el índice del repositorio.")

@@ -19,6 +19,7 @@ def estimate_repository_context_tokens(repo_context: RepositoryContext, issue_de
     
     for c in repo_context.relevant_source_files.values(): toks += len(c) // 4
     for c in repo_context.relevant_test_files.values(): toks += len(c) // 4
+    for c in getattr(repo_context, 'authoritative_context_files', {}).values(): toks += len(c) // 4
     for c in repo_context.dependency_files.values(): toks += len(c) // 4
     if repo_context.repository_map:
         toks += len(repo_context.repository_map) // 4

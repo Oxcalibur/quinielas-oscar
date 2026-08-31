@@ -178,6 +178,9 @@ class RepositoryContext(BaseModel):
     relevant_test_files: dict[str, str] = Field(default_factory=dict)
     architecture_conflicts: list["ArchitectureConflict"] = Field(default_factory=list)
     structured_config: "PythonProjectConfiguration" = Field(default_factory=PythonProjectConfiguration)
+    # New: authoritative repository documentation resolved from Issue references
+    authoritative_context_files: dict[str, str] = Field(default_factory=dict, description="Documentos de referencia autoritativos resueltos antes de generar el contrato")
+    resolved_authoritative_references: list[str] = Field(default_factory=list, description="Lista de identificadores autoritativos que fueron resueltos")
 
 class AcceptanceContract(BaseModel):
     required_final_files: set[str] = Field(default_factory=set, description="Archivos que deben existir al finalizar la tarea.")

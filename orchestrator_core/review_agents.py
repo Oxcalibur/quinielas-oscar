@@ -286,6 +286,11 @@ def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_des
     else:
         deps_json = "[Dependencias omitidas por presupuesto]"
 
+    auth_docs = getattr(repo_context, 'authoritative_context_files', {}) or {}
+    resolved_refs = getattr(repo_context, 'resolved_authoritative_references', [])
+    from orchestrator_core.prompt_budget import build_budget_safe_authoritative_evidence
+    auth_display = build_budget_safe_authoritative_evidence(auth_docs, issue_desc, budget, "agent_code_reviewer", resolved_refs)
+
     base_prompt = f"""
         Actuas como un Ingeniero de Software Principal realizando una revision de codigo. Tu tarea es verificar que el codigo generado cumple ESTRICTAMENTE con todas las fuentes de verdad.
 
@@ -296,7 +301,10 @@ def agent_code_reviewer(design: dict, generated_files: dict[str, str], issue_des
         2.  **Contrato de Aceptacion (Reglas Estrictas):**
             {contract_json}
 
-        3.  **Documento de Arquitectura (Vision y Restricciones):**
+        3.  **Documentos Autoritativos Resueltos desde el Issue (si existen):**
+            {auth_display}
+
+        4.  **Documento de Arquitectura (Vision y Restricciones):**
             {arch_doc}
 
         4.  **Plan del Arquitecto (Intencion de Implementacion):**

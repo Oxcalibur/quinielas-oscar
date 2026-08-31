@@ -672,6 +672,8 @@ def generate_validated_acceptance_contract(
     for f in canonical_contract.relevant_context_files:
         if f in repo_context.relevant_source_files or f in repo_context.relevant_test_files:
             continue # Ya cargado
+        if hasattr(repo_context, 'authoritative_context_files') and f in repo_context.authoritative_context_files:
+            continue # Ya cargado
         try:
             safe_path = resolve_safe_path(".", f)
             with open(safe_path, "r", encoding="utf-8") as f_obj:

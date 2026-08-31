@@ -10,6 +10,35 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
     title_desc_lower = f"{title} {desc}".lower()
     mentions_tests = "test" in title_desc_lower
 
+    authoritative_docs = list(getattr(repo_context, 'authoritative_context_files', {}).values())
+
+    def has_binding_authoritative_provenance(term: str, authoritative_docs: list[str]) -> bool:
+        if not authoritative_docs:
+            return False
+
+        term_lower = term.lower()
+        non_binding_markers = [
+            "example", "ejemplo",
+            "recommendation", "recomendación", "recomendacion", "recommended", "recomendado",
+            "optional", "opcional",
+            "suggested", "suggestion", "sugerido", "sugerencia",
+            "may", "non-binding", "estimated", "implementation open choice"
+        ]
+        positive_markers = [
+            "must", "shall", "required", "requires", "mandatory",
+            "debe", "deberá", "obligatorio", "requerido"
+        ]
+
+        for doc in authoritative_docs:
+            for line in doc.splitlines():
+                line_lower = line.lower()
+                if term_lower in line_lower:
+                    has_non_binding = any(marker in line_lower for marker in non_binding_markers)
+                    has_positive = any(marker in line_lower for marker in positive_markers)
+                    if not has_non_binding and has_positive:
+                        return True
+        return False
+
     # Check if there are testing requirements
     has_test_files = False
     for filename in contract.required_final_files | contract.required_new_files | contract.required_modified_files:
@@ -77,10 +106,11 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
                 else:
                     has_repo_provenance = False
                 if not has_issue_provenance and not has_repo_provenance:
-                    raise SemanticFidelityError(
-                        f"UNSUPPORTED_BINDING_OBLIGATION: required_calls {caller_func}->{callee_name} in {filepath} "
-                        "has neither binding Issue provenance nor verified repository evidence."
-                    )
+                    if not has_binding_authoritative_provenance(callee_name, authoritative_docs) and not has_binding_authoritative_provenance(caller_func, authoritative_docs):
+                        raise SemanticFidelityError(
+                            f"UNSUPPORTED_BINDING_OBLIGATION: required_calls {caller_func}->{callee_name} in {filepath} "
+                            "has neither binding Issue provenance nor verified repository evidence."
+                        )
 
     # --- required_structures provenance enforcement ---
     # For each mandatory structure obligation, either:
@@ -100,10 +130,11 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
             else:
                 has_repo_provenance = False
             if not has_issue_provenance and not has_repo_provenance:
-                raise SemanticFidelityError(
-                    f"UNSUPPORTED_BINDING_OBLIGATION: required_structures {var_name} ({check_type}) in {filepath} "
-                    "has neither binding Issue provenance nor verified repository evidence."
-                )
+                if not has_binding_authoritative_provenance(var_name, authoritative_docs):
+                    raise SemanticFidelityError(
+                        f"UNSUPPORTED_BINDING_OBLIGATION: required_structures {var_name} ({check_type}) in {filepath} "
+                        "has neither binding Issue provenance nor verified repository evidence."
+                    )
 
     # --- required_quality_tools provenance enforcement ---
     # For each mandatory quality tool obligation, either:
@@ -120,7 +151,8 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
         has_issue_provenance = tool.lower() in title_desc_lower
         has_repo_provenance = tool.lower() in detected_tools_lower
         if not has_issue_provenance and not has_repo_provenance:
-            raise SemanticFidelityError(
-                f"UNSUPPORTED_BINDING_OBLIGATION: required_quality_tools '{tool}' "
-                "has neither binding Issue provenance nor verified repository evidence."
-            )
+            if not has_binding_authoritative_provenance(tool, authoritative_docs):
+                raise SemanticFidelityError(
+                    f"UNSUPPORTED_BINDING_OBLIGATION: required_quality_tools '{tool}' "
+                    "has neither binding Issue provenance nor verified repository evidence."
+                )

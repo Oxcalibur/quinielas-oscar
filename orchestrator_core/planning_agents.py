@@ -83,6 +83,13 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
     budget_contract.add(mandatory_tokens)
 
     # Priority 1: architecture doc
+    # Priority 1: authoritative repository sources resolved from Issue references
+    auth_docs = getattr(repository_context, 'authoritative_context_files', {}) or {}
+    from orchestrator_core.prompt_budget import build_budget_safe_authoritative_evidence
+    resolved_refs = getattr(repository_context, 'resolved_authoritative_references', [])
+    auth_block = build_budget_safe_authoritative_evidence(auth_docs, description, budget_contract, "Contract Generation", resolved_refs=resolved_refs)
+
+    # Priority 2: architecture doc
     arch_text = repository_context.architecture_document or "[No se encontro documento de arquitectura.]"
     arch_tokens = len(arch_text) // 4
     if not budget_contract.can_add(arch_tokens):
@@ -142,10 +149,15 @@ def agent_generate_acceptance_contract(title: str, description: str, repository_
        - Título: {title}
        - Requisitos: {description}
 
-    2.  DOCUMENTO DE ARQUITECTURA (El 'porqué' de las decisiones de diseño):
-       --- INICIO DOCUMENTO ---
-       {arch_text}
-       --- FIN DOCUMENTO ---
+     2.  DOCUMENTOS AUTORITATIVOS RESUELTOS DESDE EL ISSUE (EVIDENCIA NORMATIVA, si se resolvieron):
+         --- INICIO DOCUMENTOS AUTORITATIVOS ---
+         {auth_block if auth_block else '[No se resolvieron documentos autoritativos.]'}
+         --- FIN DOCUMENTOS AUTORITATIVOS ---
+
+     3.  DOCUMENTO DE ARQUITECTURA (El 'porqué' de las decisiones de diseño):
+         --- INICIO DOCUMENTO ---
+         {arch_text}
+         --- FIN DOCUMENTO ---
 
     3.  RESUMEN GLOBAL DEL CÓDIGO (Todas las clases y funciones del repo):
        --- INICIO RESUMEN ÍNDICE ---
@@ -290,6 +302,12 @@ def agent_analyze_and_design(title: str, description: str, contract: AcceptanceC
     budget.add(FIXED_PROMPT_TOKENS)
 
     # ----- FUENTES OPCIONALES (warn-and-truncate) -----
+    # 0.b authoritative documents (resolved from Issue) - try to include them
+    auth_docs = getattr(repo_context, 'authoritative_context_files', {}) or {}
+    resolved_refs = getattr(repo_context, 'resolved_authoritative_references', [])
+    from orchestrator_core.prompt_budget import build_budget_safe_authoritative_evidence
+    auth_display = build_budget_safe_authoritative_evidence(auth_docs, description, budget, "agent_analyze_and_design", resolved_refs)
+
     # 4. architecture_document
     arch_doc_raw = repo_context.architecture_document or "[No se encontro documento de arquitectura.]"
     ARCH_MAX = 8000
@@ -382,6 +400,7 @@ def agent_analyze_and_design(title: str, description: str, contract: AcceptanceC
     --- INICIO CONTRATO ---
     {contract_json}
     --- FIN CONTRATO ---
+    {auth_display}
 
     CONFLICTOS DETECTADOS ENTRE ARQUITECTURA Y CODIGO REAL:
     --- INICIO CONFLICTOS ---
