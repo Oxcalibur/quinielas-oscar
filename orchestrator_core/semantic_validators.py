@@ -12,10 +12,12 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
 
     authoritative_docs = list(getattr(repo_context, 'authoritative_context_files', {}).values())
 
-    def check_issue_provenance(term: str, title: str, desc: str) -> tuple[bool, bool]:
+    def check_issue_provenance(term: str, title: str, desc: str) -> tuple[bool, bool, bool, bool]:
         term_lower = term.lower()
         is_present = False
         has_binding = False
+        has_nonbinding = False
+        has_out_of_scope = False
 
         if term_lower in title.lower():
             is_present = True
@@ -33,8 +35,14 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
             "non-binding",
             "implementation open choice"
         ]
+        out_of_scope_markers = [
+            "out of scope",
+            "out-of-scope",
+            "fuera de alcance"
+        ]
 
         in_non_binding_section = False
+        in_out_of_scope_section = False
 
         for line in desc.splitlines():
             line_lower = line.lower()
@@ -42,14 +50,24 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
             if heading_match:
                 heading_text = heading_match.group(2)
                 in_non_binding_section = any(marker in heading_text for marker in non_binding_markers)
+                in_out_of_scope_section = any(marker in heading_text for marker in out_of_scope_markers)
 
             if term_lower in line_lower:
                 is_present = True
                 has_inline_non_binding = any(marker in line_lower for marker in non_binding_markers)
-                if not in_non_binding_section and not has_inline_non_binding:
+                has_inline_out_of_scope = any(marker in line_lower for marker in out_of_scope_markers)
+
+                is_oos = in_out_of_scope_section or has_inline_out_of_scope
+                is_nb = in_non_binding_section or has_inline_non_binding
+
+                if is_oos:
+                    has_out_of_scope = True
+                if is_nb and not is_oos:
+                    has_nonbinding = True
+                if not is_oos and not is_nb:
                     has_binding = True
 
-        return is_present, has_binding
+        return is_present, has_binding, has_nonbinding, has_out_of_scope
 
     def normalize_import_for_provenance(import_str: str) -> str:
         import_str = import_str.strip()
@@ -105,36 +123,53 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
         if "no new tests" not in title_desc_lower and "tests are optional" not in title_desc_lower and "tests optional" not in title_desc_lower:
             raise SemanticFidelityError("missing_binding_test_obligation")
 
-    # Out of scope files
-    for filename in contract.required_final_files | contract.required_modified_files | contract.required_new_files:
-        if filename.lower() in title_desc_lower and "out of scope" in title_desc_lower:
-            raise SemanticFidelityError(f"nonbinding_escalation: {filename}")
+    fidelity_errors = []
 
-    # Estimated Files / Recommendations / Optional choices
-    # Nonbinding escalation
-    for filename in contract.required_final_files | contract.required_modified_files | contract.required_new_files:
-        is_present, has_binding = check_issue_provenance(filename, title, desc)
-        if is_present and not has_binding:
+    # Out of scope conflicts and Nonbinding escalation
+    for filename in sorted(contract.required_final_files | contract.required_modified_files | contract.required_new_files):
+        is_present, has_binding, has_nonbinding, has_out_of_scope = check_issue_provenance(filename, title, desc)
+        if has_out_of_scope:
+            fidelity_errors.append(f"nonbinding_escalation: required file '{filename}' conflicts with explicit out-of-scope constraint")
+        elif is_present and not has_binding:
             if not has_binding_authoritative_provenance(filename, authoritative_docs):
-                raise SemanticFidelityError(f"nonbinding_escalation: required file '{filename}' has only non-binding provenance")
+                fidelity_errors.append(f"nonbinding_escalation: required file '{filename}' has only non-binding provenance")
 
-    for deps in contract.required_imports.values():
+    for filepath in sorted(contract.required_imports):
+        deps = sorted(
+            contract.required_imports[filepath],
+            key=lambda dep: (
+                normalize_import_for_provenance(dep),
+                dep
+            )
+        )
         for dep in deps:
             normalized_dep = normalize_import_for_provenance(dep)
-            is_present, has_binding = check_issue_provenance(normalized_dep, title, desc)
-            if is_present and not has_binding:
+            is_present, has_binding, has_nonbinding, has_out_of_scope = check_issue_provenance(normalized_dep, title, desc)
+            if has_out_of_scope:
+                fidelity_errors.append(f"nonbinding_escalation: required_imports '{normalized_dep}' conflicts with explicit out-of-scope constraint")
+            elif is_present and not has_binding:
                 if not has_binding_authoritative_provenance(normalized_dep, authoritative_docs):
-                    raise SemanticFidelityError(f"nonbinding_escalation: required_imports '{normalized_dep}' has only non-binding provenance")
+                    fidelity_errors.append(f"nonbinding_escalation: required_imports '{normalized_dep}' has only non-binding provenance")
 
-    for patterns in contract.required_patterns.values():
-        for pattern in patterns:
-            is_present, has_binding = check_issue_provenance(pattern, title, desc)
-            if is_present and not has_binding:
+    for filepath in sorted(contract.required_patterns.keys()):
+        patterns = contract.required_patterns[filepath]
+        for pattern in sorted(patterns):
+            is_present, has_binding, has_nonbinding, has_out_of_scope = check_issue_provenance(pattern, title, desc)
+            if has_out_of_scope:
+                fidelity_errors.append(f"nonbinding_escalation: required_patterns '{pattern}' conflicts with explicit out-of-scope constraint")
+            elif is_present and not has_binding:
                 if not has_binding_authoritative_provenance(pattern, authoritative_docs):
-                    raise SemanticFidelityError(f"nonbinding_escalation: required_patterns '{pattern}' has only non-binding provenance")
+                    fidelity_errors.append(f"nonbinding_escalation: required_patterns '{pattern}' has only non-binding provenance")
             elif not is_present:
                 if not has_binding_authoritative_provenance(pattern, authoritative_docs):
-                    raise SemanticFidelityError(f"UNSUPPORTED_BINDING_OBLIGATION: {pattern}")
+                    fidelity_errors.append(f"UNSUPPORTED_BINDING_OBLIGATION: {pattern}")
+
+    if fidelity_errors:
+        unique_errors = []
+        for err in fidelity_errors:
+            if err not in unique_errors:
+                unique_errors.append(err)
+        raise SemanticFidelityError("\n".join(unique_errors))
 
     # --- required_calls provenance enforcement ---
     # For each mandatory call obligation, either:

@@ -575,12 +575,19 @@ def generate_validated_acceptance_contract(
     attempt_contract = 1
     max_contract_attempts = 3
     diagnostics = []
+    feedback_history = []
     prior_contract_feedback = ""
     Diagnostic = collections.namedtuple('Diagnostic', ['attempt', 'category', 'violation', 'final_phase'])
     canonical_contract = None
     gate_plan = None
 
     while attempt_contract <= max_contract_attempts:
+        if feedback_history:
+            header = "Todas las violations listadas siguen vigentes.\nCorregir un error nuevo no permite reintroducir errores de intentos anteriores.\n\n"
+            prior_contract_feedback = header + "\n".join(feedback_history)
+        else:
+            prior_contract_feedback = ""
+
         try:
             canonical_contract = agent_generate_acceptance_contract(title, desc, repo_context, runtime, prior_feedback=prior_contract_feedback)
             logging.info(f"Contrato Canónico generado: {canonical_contract.model_dump_json(indent=2)}")
@@ -655,7 +662,11 @@ def generate_validated_acceptance_contract(
                 final_phase = "gate_plan"
 
             diagnostics.append(Diagnostic(attempt=attempt_contract, category=cat, violation=str(e), final_phase=final_phase))
-            prior_contract_feedback = str(e)
+
+            for error_line in str(e).splitlines():
+                error_line = error_line.strip()
+                if error_line and error_line not in feedback_history:
+                    feedback_history.append(error_line)
 
             if attempt_contract >= max_contract_attempts:
                 raise ContractGenerationExhaustedError("Exhausted contract generation attempts", diagnostics=diagnostics) from e
