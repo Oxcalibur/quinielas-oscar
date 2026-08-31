@@ -12,6 +12,55 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
 
     authoritative_docs = list(getattr(repo_context, 'authoritative_context_files', {}).values())
 
+    def check_issue_provenance(term: str, title: str, desc: str) -> tuple[bool, bool]:
+        term_lower = term.lower()
+        is_present = False
+        has_binding = False
+
+        if term_lower in title.lower():
+            is_present = True
+            has_binding = True
+
+        non_binding_markers = [
+            "estimated files",
+            "recommendation", "recommendations", "recommended",
+            "recomendación", "recomendaciones", "recomendado",
+            "optional", "optional choices", "optional choice",
+            "suggestion", "suggested",
+            "sugerencia", "sugerido",
+            "example", "examples",
+            "ejemplo", "ejemplos",
+            "non-binding",
+            "implementation open choice"
+        ]
+
+        in_non_binding_section = False
+
+        for line in desc.splitlines():
+            line_lower = line.lower()
+            heading_match = re.match(r'^(#{1,6})\s+(.*)', line_lower)
+            if heading_match:
+                heading_text = heading_match.group(2)
+                in_non_binding_section = any(marker in heading_text for marker in non_binding_markers)
+
+            if term_lower in line_lower:
+                is_present = True
+                has_inline_non_binding = any(marker in line_lower for marker in non_binding_markers)
+                if not in_non_binding_section and not has_inline_non_binding:
+                    has_binding = True
+
+        return is_present, has_binding
+
+    def normalize_import_for_provenance(import_str: str) -> str:
+        import_str = import_str.strip()
+        match = re.match(r'^from\s+([a-zA-Z0-9_\.]+)\s+import', import_str)
+        if match:
+            return match.group(1).split('.')[0]
+        match = re.match(r'^import\s+([a-zA-Z0-9_\.]+)', import_str)
+        if match:
+            return match.group(1).split('.')[0]
+        return import_str.split('.')[0]
+
     def has_binding_authoritative_provenance(term: str, authoritative_docs: list[str]) -> bool:
         if not authoritative_docs:
             return False
@@ -63,22 +112,29 @@ def validate_semantic_fidelity(contract: AcceptanceContract, title: str, desc: s
 
     # Estimated Files / Recommendations / Optional choices
     # Nonbinding escalation
-    # If the file is in estimated files, it shouldn't be in required
     for filename in contract.required_final_files | contract.required_modified_files | contract.required_new_files:
-        if "estimated files" in title_desc_lower and filename.lower() in title_desc_lower:
-            raise SemanticFidelityError(f"nonbinding_escalation: {filename}")
+        is_present, has_binding = check_issue_provenance(filename, title, desc)
+        if is_present and not has_binding:
+            if not has_binding_authoritative_provenance(filename, authoritative_docs):
+                raise SemanticFidelityError(f"nonbinding_escalation: required file '{filename}' has only non-binding provenance")
 
     for deps in contract.required_imports.values():
         for dep in deps:
-            if "recommendation" in title_desc_lower and dep.lower() in title_desc_lower:
-                raise SemanticFidelityError(f"nonbinding_escalation: {dep}")
+            normalized_dep = normalize_import_for_provenance(dep)
+            is_present, has_binding = check_issue_provenance(normalized_dep, title, desc)
+            if is_present and not has_binding:
+                if not has_binding_authoritative_provenance(normalized_dep, authoritative_docs):
+                    raise SemanticFidelityError(f"nonbinding_escalation: required_imports '{normalized_dep}' has only non-binding provenance")
 
     for patterns in contract.required_patterns.values():
         for pattern in patterns:
-            if "optional choice" in title_desc_lower and pattern.lower() in title_desc_lower:
-                raise SemanticFidelityError(f"nonbinding_escalation: {pattern}")
-            if pattern.lower() not in title_desc_lower:
-                raise SemanticFidelityError(f"UNSUPPORTED_BINDING_OBLIGATION: {pattern}")
+            is_present, has_binding = check_issue_provenance(pattern, title, desc)
+            if is_present and not has_binding:
+                if not has_binding_authoritative_provenance(pattern, authoritative_docs):
+                    raise SemanticFidelityError(f"nonbinding_escalation: required_patterns '{pattern}' has only non-binding provenance")
+            elif not is_present:
+                if not has_binding_authoritative_provenance(pattern, authoritative_docs):
+                    raise SemanticFidelityError(f"UNSUPPORTED_BINDING_OBLIGATION: {pattern}")
 
     # --- required_calls provenance enforcement ---
     # For each mandatory call obligation, either:
